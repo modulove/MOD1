@@ -3,3 +3,8 @@ A DIY general-purpose CV/Gate module for Eurorack Modular Synth. It is intended 
 
 [Blog article](https://note.com/solder_state/n/nc05d8e8fd311)
 
+## Update April 2025
+
+There are a few additional Firmware versions popping up recently:
+
+[Alternative firmwares for Hagiwos Mod1](https://github.com/rob-scape/hgw-mod1-firmwares)
