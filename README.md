@@ -23,9 +23,34 @@ Welcome to the MOD1 Workshop repository – a collection of Firmwares for Hagiwo
 - **Multiple Firmware Versions**  
   Includes 12 distinct firmware versions developed by Hagiwo, with additional contributions from the community.
 
-# More MOD1 Infos
+## Resources
+YouTube: Visit Hagiwo's YouTube channel for project demonstrations, tutorials, and build guides.
 
-[Blog article](https://note.com/solder_state/n/nc05d8e8fd311)
+Access exclusive project files, PCB gerber data, and assembly instructions on Patreon.
+
+Follow Hagiwo on Twitter and Instagram to stay updated with the latest developments.
+
+For an in-depth look at the project, read Hagiwo's article.
+
+
+## Contributing
+Contributions are welcome! Whether you're submitting a firmware update, designing a new panel, or improving documentation, your input is highly appreciated. Please fork the repository and submit a pull request with your changes.
+
+Special thanks to Robert Heel and all community contributors for their valuable efforts and support.
+
+## License
+This project is open-source and available under the MIT License. Feel free to use, modify, and distribute the work as per the license terms.
+
+## Acknowledgments
+Hagiwo for the innovative MOD1 designs.
+
+Linus from Modulove for the alternative panel designs.
+
+The Community for contributions and support! 
+Shout-out to Robert Heel!, Bendix, fxwiegand, knobsel and all I forgot (sorry!).
+
+For questions, suggestions, or help, please open an issue in the repository.
+
 
 ## Update April 2025
 
