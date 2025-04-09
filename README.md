@@ -1,10 +1,10 @@
 # MOD1 Hardware & Software Collection
 
-Welcome to the MOD1 Workshop repository – a collection of Firmwares for Hagiwo's MOD1 hardware module, featuring alternative panel designs by Modulove and 12 different firmware versions contributed by Hagiwo and fellow enthusiasts. These were made for a Workshop series by modulove in Hamburg in 2024-2025.
+Welcome to the MOD1 Workshop repository – a collection of Firmwares for Hagiwo's MOD1 hardware module, alternative frontpanel designs and new different firmware versions contributed by fellow enthusiasts. These were made for a Workshop series by modulove in Hamburg in 2024-2025.
 
 ## Overview
 
-**MOD1 Hagiwo** is a series of open-source, Arduino Nano-based general-purpose CV/Gate module designes designed for DIY Eurorack modular synthesizers. These modules are built with a focus on accessibility and customization. examples include:
+**MOD1 Hagiwo** is a series of open-source, Arduino Nano-based general-purpose CV/Gate designs for DIY Eurorack modular. These modules are built with a focus on accessibility and customization. examples include:
 
 - **Square VCO**: A square wave oscillator with V/oct (voltage per octave) support.
 - **LFO**: A low-frequency oscillator ideal for generating vibrato and other modulation.
@@ -31,7 +31,6 @@ Access exclusive project files, PCB gerber data, and assembly instructions on Pa
 Follow Hagiwo on Twitter and Instagram to stay updated with the latest developments.
 
 For an in-depth look at the project, read Hagiwo's article.
-
 
 ## Contributing
 Contributions are welcome! Whether you're submitting a firmware update, designing a new panel, or improving documentation, your input is highly appreciated. Please fork the repository and submit a pull request with your changes.
