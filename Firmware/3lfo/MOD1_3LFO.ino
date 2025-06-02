@@ -1,9 +1,11 @@
 /*
 This code was originally written by HAGIWO and released under CC0
 
-HAGIWO MOD1 3ch LFO Ver1.0
+HAGIWO MOD1 3ch LFO Ver1.1
 https://note.com/solder_state/n/n84c1694f2b4c
 3ch output LFO.
+
+Adapted by Rob Heel. Added a fourth waveform: Random slope. 
 
 --Pin assign---
 POT1  A0  LFO1 frequency
@@ -16,14 +18,13 @@ F4    D11 LFO3 output
 BUTTON    change waveform
 LED       LFO1 output
 EEPROM    Saves select waveform
-*/
 
-// This program generates three independent LFO signals (D9, D10, D11) and an LED indicator (D3) at ~62.5kHz PWM.
-// Each LFO has a selectable waveform (Triangle, Square, Sine) chosen by a push button on D4 (INPUT_PULLUP).
-// The frequencies of the LFOs are controlled by three pots on A0, A1, A2, plus an offset on A3.
-// Now the maximum frequency is changed from 2Hz to 5Hz. (0.02 ~ 5Hz range)
-// Also, whenever the waveform changes, its type is saved to EEPROM, 
-// and upon startup, the saved waveform type is restored from EEPROM.
+This program generates independent LFO signals (D9, D10, D11) and an LED indicator (D3) at ~62.5kHz PWM.
+Each LFO has a selectable waveform (Triangle, Square, Sine, Random Slope) chosen by a push button on D4 (INPUT_PULLUP).
+The frequencies of the LFOs are controlled by three pots on A0, A1, A2, plus an offset on A3.
+Now the maximum frequency is changed from 2Hz to 5Hz. (0.02 ~ 5Hz range)
+Whenever the waveform changes, its type is saved to EEPROM and upon startup, the saved waveform type is restored from EEPROM.
+*/
 
 #include <EEPROM.h> // Include EEPROM library for read/write
 
@@ -35,7 +36,7 @@ static const unsigned long debounceDelay = 50UL;     // 50ms for switch debounce
 // Single wave table (8-bit resolution)
 uint8_t waveTable[TABLE_SIZE];
 
-// Current wave type: 0=Triangle, 1=Square, 2=Sine
+// Current wave type: 0=Triangle, 1=Square, 2=Sine, 3=Random Slope
 int waveType = 0; 
 
 // Phase indexes for each LFO
@@ -55,12 +56,29 @@ unsigned long previousMicros = 0;
 int lastButtonState = HIGH;               // HIGH means not pressed (pull-up)
 unsigned long buttonPreviousMillis = 0;   // Last time we acknowledged a button press
 
+// Random Slope variables
+float currentSlopeValue1 = 0;
+float targetSlopeValue1 = 0;
+float slopeStep1 = 0;
+unsigned long previousMillis1 = 0;
+
+float currentSlopeValue2 = 0;
+float targetSlopeValue2 = 0;
+float slopeStep2 = 0;
+unsigned long previousMillis2 = 0;
+
+float currentSlopeValue3 = 0;
+float targetSlopeValue3 = 0;
+float slopeStep3 = 0;
+unsigned long previousMillis3 = 0;
+
 // ---------------- Function Prototypes ----------------
 void configurePWM();                       // Set up Timer1 and Timer2 for ~62.5kHz PWM
 void createWaveTable(int type);            // Re-generate wave table for the chosen wave type
 void createTriangleTable();           
 void createSquareTable();
 void createSineTable();
+void updateRandomSlope(float &currentMillis, float &previousMillis, float &currentSlopeValue, float &targetSlopeValue, float &slopeStep, float frequency);
 float readFrequency(int analogPin);        // Maps analog input (0~1023) to 0.02~5.0Hz
 float readFrequencyOffset(int analogPin);  // Maps analog input (0~1023) to 0.02~5.0Hz
 void updateLFO(float &phaseIndex, float freq);
@@ -80,8 +98,8 @@ void setup() {
 
   // Read waveType from EEPROM (address 0)
   int storedWaveType = EEPROM.read(0);  // Range could be 0~255
-  // Validate the stored value (must be 0,1,2); if invalid, fallback to 0
-  if (storedWaveType < 0 || storedWaveType > 2) {
+  // Validate the stored value (must be 0,1,2,3); if invalid, fallback to 0
+  if (storedWaveType < 0 || storedWaveType > 3) {
     storedWaveType = 0; 
   }
   waveType = storedWaveType;
@@ -113,31 +131,44 @@ void loop() {
     lfoFreq2 = baseFreq2 + freqOffset;
     lfoFreq3 = baseFreq3 + freqOffset;
 
-    // Update phase indexes
-    updateLFO(lfoIndex1, lfoFreq1);
-    updateLFO(lfoIndex2, lfoFreq2);
-    updateLFO(lfoIndex3, lfoFreq3);
-
-    // Get table positions (integer) from phase indexes
-    int tablePos1 = (int)lfoIndex1 % TABLE_SIZE;
-    int tablePos2 = (int)lfoIndex2 % TABLE_SIZE;
-    int tablePos3 = (int)lfoIndex3 % TABLE_SIZE;
-
-    // Read waveTable for each LFO
-    uint8_t outputVal1 = waveTable[tablePos1];
-    uint8_t outputVal2 = waveTable[tablePos2];
-    uint8_t outputVal3 = waveTable[tablePos3];
+  if (waveType == 3) { // Random Slope
+    unsigned long currentMillis = millis();
+    updateRandomSlope(currentMillis, previousMillis1, currentSlopeValue1, targetSlopeValue1, slopeStep1, lfoFreq1);
+    updateRandomSlope(currentMillis, previousMillis2, currentSlopeValue2, targetSlopeValue2, slopeStep2, lfoFreq2);
+    updateRandomSlope(currentMillis, previousMillis3, currentSlopeValue3, targetSlopeValue3, slopeStep3, lfoFreq3);
 
     // Set duty cycles directly via OCR registers
-    // LFO1 -> OCR1A (Pin 9)
-    // LFO2 -> OCR1B (Pin 10)
-    // LFO3 -> OCR2A (Pin 11)
-    // LED indicator (same as LFO1) -> OCR2B (Pin 3)
+    OCR1A = currentSlopeValue1;  
+    OCR1B = currentSlopeValue2;  
+    OCR2A = currentSlopeValue3;  
+    OCR2B = currentSlopeValue1;  // LED shows LFO1's output
+  } else {
+      // Update phase indexes
+      updateLFO(lfoIndex1, lfoFreq1);
+      updateLFO(lfoIndex2, lfoFreq2);
+      updateLFO(lfoIndex3, lfoFreq3);
 
-    OCR1A = outputVal1;  
-    OCR1B = outputVal2;  
-    OCR2A = outputVal3;  
-    OCR2B = outputVal1;  // LED shows LFO1's output
+      // Get table positions (integer) from phase indexes
+      int tablePos1 = (int)lfoIndex1 % TABLE_SIZE;
+      int tablePos2 = (int)lfoIndex2 % TABLE_SIZE;
+      int tablePos3 = (int)lfoIndex3 % TABLE_SIZE;
+
+      // Read waveTable for each LFO
+      uint8_t outputVal1 = waveTable[tablePos1];
+      uint8_t outputVal2 = waveTable[tablePos2];
+      uint8_t outputVal3 = waveTable[tablePos3];
+
+      // Set duty cycles directly via OCR registers
+      // LFO1 -> OCR1A (Pin 9)
+      // LFO2 -> OCR1B (Pin 10)
+      // LFO3 -> OCR2A (Pin 11)
+      // LED indicator (same as LFO1) -> OCR2B (Pin 3)
+
+      OCR1A = outputVal1;  
+      OCR1B = outputVal2;  
+      OCR2A = outputVal3;  
+      OCR2B = outputVal1;  // LED shows LFO1's output
+    }
   }
 }
 
@@ -174,8 +205,8 @@ void handleButtonInput() {
   if (currentMillis - buttonPreviousMillis > debounceDelay) {
     // Detect transition from HIGH to LOW (button press)
     if (reading == LOW && lastButtonState == HIGH) {
-      // Cycle waveType: 0->1->2->0->...
-      waveType = (waveType + 1) % 3;
+      // Cycle waveType: 0->1->2->3->0->...
+      waveType = (waveType + 1) % 4;
 
       // Regenerate the wave table for the new wave type
       createWaveTable(waveType);
@@ -201,8 +232,10 @@ void createWaveTable(int type) {
     case 1: // Square
       createSquareTable();
       break;
-    default: // Sine
+    case 2: // Sine
       createSineTable();
+      break;
+    default: // Random Slope (no wave table needed)
       break;
   }
 }
@@ -277,4 +310,22 @@ void updateLFO(float &phaseIndex, float freq) {
   float increment = freq * ((float)TABLE_SIZE / 2500.0f);
   phaseIndex += increment;
   // The table access uses % TABLE_SIZE on int cast, so no clamp needed here
+}
+
+// ------------------------------------------------------
+// Update Random Slope waveform
+void updateRandomSlope(unsigned long currentMillis, unsigned long &previousMillis, float &currentSlopeValue, float &targetSlopeValue, float &slopeStep, float frequency) {
+    if (currentMillis - previousMillis >= (1000.0 / frequency)) {
+        previousMillis = currentMillis;
+        targetSlopeValue = random(0, 256); // Generate a random value between 0 and 255
+        slopeStep = (targetSlopeValue - currentSlopeValue) / (1000.0 / frequency);
+    }
+
+    currentSlopeValue += slopeStep;
+
+    // Keep within bounds
+    if ((slopeStep > 0 && currentSlopeValue >= targetSlopeValue) ||
+        (slopeStep < 0 && currentSlopeValue <= targetSlopeValue)) {
+        currentSlopeValue = targetSlopeValue;
+    }
 }
