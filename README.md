@@ -2,6 +2,10 @@
 
 Welcome to the MOD1 Workshop repository – a collection of Firmwares for Hagiwo's MOD1 hardware module, alternative frontpanel designs and new different firmware versions contributed by fellow enthusiasts. These were made for a Workshop series by modulove in Hamburg in 2024-2025.
 
+Firmware is available in our web-uploader here:
+[Upload MOD1 firmware in Browser](https://dl.modulove.de/module/mod1/)
+
+
 ## Overview
 
 **MOD1 Hagiwo** is a series of open-source, Arduino Nano-based general-purpose CV/Gate designs for DIY Eurorack modular. These modules are built with a focus on accessibility and customization. examples include:
