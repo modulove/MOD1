@@ -1,6 +1,6 @@
 # HAGIWO MOD1 3-Channel LF0
 
-<1-- [![Modulove](https://img.shields.io/badge/Modulove-MOD1-orange)](https://dl.modulove.de/module/mod1/) -->
+[![Modulove](https://img.shields.io/badge/Modulove-MOD1-orange)](https://dl.modulove.de/module/mod1/)
 
 3-channel Low Frequency Oscillator (LFO) for HAGIWO MOD1 module. 
 This version adds few features and fixes.
