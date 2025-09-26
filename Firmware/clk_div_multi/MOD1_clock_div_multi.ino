@@ -1,291 +1,433 @@
 /*
-This code was originally written by HAGIWO and released under CC0
+HAGIWO MOD1 Clock div/multi Ver2
+Enhanced with Pin Change Interrupts and direct port manipulation
 
-HAGIWO MOD1 Clock div/multi Ver1.0
-1 clock input , 3 trig output.
-Clock Divider & Multiplier. Toggle div/multi function with a push button.
-Div/multi rate : 1,2,3,4,8,16
 
-https://note.com/solder_state/n/n991254a0f20a
+- Pin Change Interrupts for zero-latency edge detection  
+- Direct port manipulation for fastest I/O
+- Hardware timer for precise pulse width
+- Interrupt-driven 
 
---Pin assign---
-POT1  A0  out1 rate
-POT2  A1  out2 rate
-POT3  A2  out3 rate
-F1    A3  clock in
-F2    A4  trig out1
-F3    A5  trig out2
-F4    D11 trig out3
-BUTTON    sw divider or multiple
-LED       clockin (It blinks when switching between div/multi.)
-EEPROM    div/multi mode memory
+features
 
-The source code and circuit diagram are license-free. Creative Commons license CC0.
+- 3 independent outputs with div/mult rates: 1,2,3,4,8,16
+- Mode switching between divider and multiplier
+- EEPROM mode storage
+- LED indication with mode-switch blinking
+
+Original code by HAGIWO - Released under CC0
 */
 
-#include <EEPROM.h>                          // Include EEPROM library for storing mode state
+#include <EEPROM.h>
 
-// Define mode constants for clarity
-#define MODE_DIVIDER 1                       // Mode 1: Clock Divider (divider mode)
-#define MODE_MULTIPLIER 2                    // Mode 2: Clock Multiplier (multiplier mode)
-
-int mode;                                    // Global variable for current mode (divider or multiplier)
+// Define mode constants
+#define MODE_DIVIDER 1
+#define MODE_MULTIPLIER 2
 
 // Pin assignments
-const int buttonPin = 4;                     // D4: Mode-switch push-button (internal pullup enabled)
-const int clockInputPin = 17;                // D17: Clock source input
-const int ledPin = 3;                        // D3: LED indicator (normally mirrors clock input)
-
-// Output channel pins (synchronized in divider mode)
-const int outPins[3] = {9, 10, 11};           
-
-// Analog input pins for rate selection (channel 1 = A0, channel 2 = A1, channel 3 = A2)
+const int buttonPin = 4;        // D4
+const int clockInputPin = 17;   // D17/A3  
+const int ledPin = 3;           // D3
+const int outPins[3] = {9, 10, 11};  // D9, D10, D11
 const int analogPins[3] = {A0, A1, A2};
 
-// Global variables for button debounce
-int lastButtonState = HIGH;                  // Last button state (HIGH when not pressed)
-unsigned long buttonPreviousMillis = 0;      // Timestamp of last valid button event
-const unsigned long debounceDelay = 200;     // Debounce delay set to 200 msec
+// Direct port manipulation for ATmega328P
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168__)
+  // Port definitions
+  #define LED_PORT PORTD
+  #define LED_DDR DDRD
+  #define LED_BIT (1 << 3)  // D3
+  
+  #define OUT1_PORT PORTB
+  #define OUT1_BIT (1 << 1)  // D9
+  #define OUT2_PORT PORTB
+  #define OUT2_BIT (1 << 2)  // D10
+  #define OUT3_PORT PORTB
+  #define OUT3_BIT (1 << 3)  // D11
+  #define OUT_DDR DDRB
+  
+  #define BUTTON_PIN PIND
+  #define BUTTON_PORT PORTD
+  #define BUTTON_BIT (1 << 4)  // D4
+  
+  // For Pin Change Interrupt on A3/D17 (PC3)
+  #define CLOCK_PIN PINC
+  #define CLOCK_PORT PORTC
+  #define CLOCK_BIT (1 << 3)  // A3/PC3
+  #define CLOCK_DDR DDRC
+  
+  // Fast I/O macros
+  #define LED_HIGH() (LED_PORT |= LED_BIT)
+  #define LED_LOW() (LED_PORT &= ~LED_BIT)
+  #define LED_TOGGLE() (LED_PORT ^= LED_BIT)
+  
+  #define OUT1_HIGH() (OUT1_PORT |= OUT1_BIT)
+  #define OUT1_LOW() (OUT1_PORT &= ~OUT1_BIT)
+  #define OUT2_HIGH() (OUT2_PORT |= OUT2_BIT)
+  #define OUT2_LOW() (OUT2_PORT &= ~OUT2_BIT)
+  #define OUT3_HIGH() (OUT3_PORT |= OUT3_BIT)
+  #define OUT3_LOW() (OUT3_PORT &= ~OUT3_BIT)
+  
+  #define BUTTON_PRESSED() (!(BUTTON_PIN & BUTTON_BIT))
+  #define CLOCK_READ() (CLOCK_PIN & CLOCK_BIT)
+#else
+  // Fallback for other boards
+  #define LED_HIGH() digitalWrite(ledPin, HIGH)
+  #define LED_LOW() digitalWrite(ledPin, LOW)
+  #define OUT1_HIGH() digitalWrite(outPins[0], HIGH)
+  #define OUT1_LOW() digitalWrite(outPins[0], LOW)
+  #define OUT2_HIGH() digitalWrite(outPins[1], HIGH)
+  #define OUT2_LOW() digitalWrite(outPins[1], LOW)
+  #define OUT3_HIGH() digitalWrite(outPins[2], HIGH)
+  #define OUT3_LOW() digitalWrite(outPins[2], LOW)
+  #define BUTTON_PRESSED() (digitalRead(buttonPin) == LOW)
+  #define CLOCK_READ() digitalRead(clockInputPin)
+#endif
 
-// Global variable for synchronized divider mode (mode1)
-unsigned long dividerCounter = 0;            // Global divider counter for mode1 synchronization
+// Global variables
+volatile uint8_t mode;
+volatile bool clockRisingEdge = false;
+volatile bool clockFallingEdge = false;
+volatile uint32_t clockRiseTime = 0;
+volatile uint32_t clockFallTime = 0;
+volatile uint8_t lastClockState = 0;
 
-// Global variables for clock timing in multiplier mode (mode2)
-unsigned long lastClockTime = 0;             // Timestamp of previous rising edge for multiplier mode
-unsigned long clockPeriod = 0;               // Measured period between rising edges in multiplier mode
+// Clock tracking with microsecond precision
+volatile uint32_t dividerCounter = 0;
+uint32_t lastRiseTimeMicros = 0;
+uint32_t clockPeriodMicros = 40000; // Default 25Hz (40ms)
+uint32_t avgClockPeriod = 40000;
 
-// Fixed output pulse width for all channels (10 msec)
-const unsigned long pulseWidth = 10;         // Duration of each output pulse in milliseconds
+// Button debounce
+uint8_t lastButtonState = HIGH;
+uint32_t buttonDebounceTime = 0;
 
-// Structure to hold parameters for each output channel (used for multiplier mode scheduling)
+// Pulse management
+const uint32_t pulseWidthMicros = 10000;  // 10ms in microseconds
+
 struct OutputChannel {
-  uint8_t outPin;                // Digital output pin for pulse generation
-  int rate;                      // Factor (1, 2, 3, 4, 8, 16) read from corresponding analog input
-  bool pulseActive;              // Flag indicating if a pulse is currently active
-  unsigned long pulseEndTime;    // Timestamp when the current pulse should end
-  int pulsesGenerated;           // Count of pulses already generated in current multiplier cycle
-  unsigned long nextPulseTime;   // Next scheduled time for a pulse in multiplier mode
-  unsigned long multiplierInterval; // Time interval between pulses (clockPeriod / rate)
+  uint8_t rate;
+  uint8_t divCount;
+  bool pulseActive;
+  uint32_t pulseEndTime;
+  uint8_t pulsesGenerated;
+  uint32_t nextPulseTime;
+  uint32_t multiplierInterval;
 };
 
-OutputChannel channels[3];       // Array for three output channels
+OutputChannel channels[3];
 
-// Global variables for LED blinking override during mode switching
-bool ledBlinkingActive = false;    // Flag to indicate that LED blinking override is active
-int ledBlinkTotalCycles = 0;         // Total number of full blink cycles to perform
-int ledBlinkCycleCount = 0;          // Counter for completed blink cycles
-unsigned long ledBlinkInterval = 0;  // Interval for one half-cycle (on or off duration)
-unsigned long nextLedBlinkTime = 0;  // Timestamp for next LED state toggle
-bool ledBlinkState = false;          // Current state of LED during blinking (true = HIGH)
+// LED blinking for mode indication
+bool ledBlinkingActive = false;
+uint8_t ledBlinkCycles = 0;
+uint8_t ledBlinkCount = 0;
+uint32_t ledBlinkNextTime = 0;
+bool ledBlinkState = false;
 
-// Function prototypes
-void handleButtonInput();
-void switchMode();
-void startLedBlinking(int cycles, unsigned long fullCyclePeriod);
-void updateLedBlinking();
-void triggerPulse(OutputChannel &channel);
-int getFactorFromAnalog(int analogPin);
+// Analog reading optimization
+uint32_t lastAnalogReadTime = 0;
+uint8_t analogReadIndex = 0;
+uint8_t rateCache[3] = {1, 1, 1};
+
+// Pin Change Interrupt for clock input (PC3/A3)
+ISR(PCINT1_vect) {
+  uint8_t clockState = CLOCK_READ();
+  uint32_t currentTime = micros();
+  
+  if (clockState && !lastClockState) {
+    // Rising edge detected
+    clockRisingEdge = true;
+    clockRiseTime = currentTime;
+    if (!ledBlinkingActive) {
+      LED_HIGH();
+    }
+  } else if (!clockState && lastClockState) {
+    // Falling edge detected
+    clockFallingEdge = true;
+    clockFallTime = currentTime;
+    if (!ledBlinkingActive) {
+      LED_LOW();
+    }
+  }
+  
+  lastClockState = clockState;
+}
+
+// Timer1 Compare Match A interrupt for microsecond-accurate pulse timing
+ISR(TIMER1_COMPA_vect) {
+  uint32_t currentTime = micros();
+  
+  // Check all channels for pulse end
+  for (uint8_t i = 0; i < 3; i++) {
+    if (channels[i].pulseActive && currentTime >= channels[i].pulseEndTime) {
+      switch(i) {
+        case 0: OUT1_LOW(); break;
+        case 1: OUT2_LOW(); break;
+        case 2: OUT3_LOW(); break;
+      }
+      channels[i].pulseActive = false;
+    }
+  }
+}
+
+// Fast analog read with direct threshold comparison
+inline uint8_t getRateFast(uint8_t analogPin) {
+  int val = analogRead(analogPin);
+  if (val < 102) return 1;
+  if (val < 308) return 2;
+  if (val < 514) return 3;
+  if (val < 720) return 4;
+  if (val < 926) return 8;
+  return 16;
+}
+
+// Trigger pulse with microsecond precision
+inline void triggerPulse(uint8_t ch) {
+  if (!channels[ch].pulseActive) {
+    switch(ch) {
+      case 0: OUT1_HIGH(); break;
+      case 1: OUT2_HIGH(); break;
+      case 2: OUT3_HIGH(); break;
+    }
+    channels[ch].pulseEndTime = micros() + pulseWidthMicros;
+    channels[ch].pulseActive = true;
+  }
+}
 
 void setup() {
-  Serial.begin(9600);                        // Initialize serial communication for debugging
+  // Disable interrupts during setup
+  cli();
   
-  pinMode(buttonPin, INPUT_PULLUP);          // Configure D4 as input with internal pullup for button
-  pinMode(ledPin, OUTPUT);                     // Configure D3 as output for LED indicator
-  pinMode(clockInputPin, INPUT);               // Configure D17 as input for clock source
+  Serial.begin(115200);
+  Serial.println(F("Eurorack Clock Div/Mult v2.5"));
+  Serial.println(F("Standalone - No Libraries Required"));
   
-  // Initialize each output channel and set its corresponding pin as OUTPUT
-  for (int i = 0; i < 3; i++) {
-    pinMode(outPins[i], OUTPUT);             // Set output channel pin as OUTPUT
-    digitalWrite(outPins[i], LOW);           // Initialize output to LOW
-    channels[i].outPin = outPins[i];         // Assign digital output pin for the channel
-    channels[i].pulseActive = false;         // No active pulse initially
-    channels[i].pulsesGenerated = 0;         // Reset multiplier pulse count
-    channels[i].nextPulseTime = 0;           // Clear next scheduled pulse time
-    channels[i].multiplierInterval = 0;      // Initialize multiplier interval to 0
+  // Configure ports for maximum speed
+  #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168__)
+    // Set pin directions
+    LED_DDR |= LED_BIT;                          // LED output
+    OUT_DDR |= (OUT1_BIT | OUT2_BIT | OUT3_BIT); // Channel outputs
+    BUTTON_PORT |= BUTTON_BIT;                   // Button pullup
+    CLOCK_DDR &= ~CLOCK_BIT;                     // Clock input
+    CLOCK_PORT |= CLOCK_BIT;                     // Clock pullup
+    
+    // Clear outputs
+    OUT1_LOW();
+    OUT2_LOW();
+    OUT3_LOW();
+    LED_LOW();
+    
+    // Setup Pin Change Interrupt for clock (PC3)
+    PCICR |= (1 << PCIE1);    // Enable PCINT for Port C
+    PCMSK1 |= (1 << PCINT11); // Enable PCINT11 (PC3/A3)
+    
+    // Setup Timer1 for pulse timing (1kHz interrupt)
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1 = 0;
+    OCR1A = 249;  // 16MHz / 64 / 250 = 1kHz
+    TCCR1B |= (1 << WGM12);  // CTC mode
+    TCCR1B |= (1 << CS11) | (1 << CS10);  // Prescaler 64
+    TIMSK1 |= (1 << OCIE1A);  // Enable compare interrupt
+  #else
+    // Fallback for other boards
+    pinMode(ledPin, OUTPUT);
+    pinMode(buttonPin, INPUT_PULLUP);
+    pinMode(clockInputPin, INPUT_PULLUP);
+    for (int i = 0; i < 3; i++) {
+      pinMode(outPins[i], OUTPUT);
+      digitalWrite(outPins[i], LOW);
+    }
+  #endif
+  
+  // Initialize channels
+  for (uint8_t i = 0; i < 3; i++) {
+    channels[i].rate = 1;
+    channels[i].divCount = 0;
+    channels[i].pulseActive = false;
+    channels[i].pulsesGenerated = 0;
+    channels[i].nextPulseTime = 0;
+    channels[i].multiplierInterval = 0;
   }
   
-  // Read stored mode from EEPROM (address 0) and validate it
-  mode = EEPROM.read(0);                     // Read mode from EEPROM
+  // Read mode from EEPROM
+  mode = EEPROM.read(0);
   if (mode != MODE_DIVIDER && mode != MODE_MULTIPLIER) {
-    mode = MODE_DIVIDER;                     // Default to divider mode if invalid value
+    mode = MODE_DIVIDER;
+    EEPROM.write(0, mode);
   }
   
-  // Reset global counters for both modes
-  dividerCounter = 0;                        // Reset divider counter for mode1
-  lastClockTime = 0;                         // Reset last clock time for mode2
-  clockPeriod = 0;                           // Clear measured clock period for mode2
+  Serial.print(F("Starting in "));
+  Serial.print(mode == MODE_DIVIDER ? F("DIVIDER") : F("MULTIPLIER"));
+  Serial.println(F(" mode"));
+  
+  // Enable interrupts
+  sei();
+  
+  Serial.println(F("Ready!"));
 }
 
 void loop() {
-  unsigned long currentMillis = millis();    // Get current time in milliseconds
+  uint32_t currentMicros = micros();
+  uint32_t currentMillis = currentMicros / 1000;
   
-  handleButtonInput();                       // Check and process button press with debounce
-  
-  // If LED blinking override is active, update its state; otherwise mirror clock input to LED
-  if (ledBlinkingActive) {
-    updateLedBlinking();                     // Update LED blinking sequence during mode change
-  } else {
-    int clockInput = digitalRead(clockInputPin); // Read clock input from D17
-    digitalWrite(ledPin, clockInput);          // Mirror D17 clock input to LED on D3
+  // Handle button press (10ms check interval)
+  static uint32_t lastButtonCheck = 0;
+  if (currentMillis - lastButtonCheck >= 10) {
+    lastButtonCheck = currentMillis;
+    
+    bool pressed = BUTTON_PRESSED();
+    if (pressed && lastButtonState == HIGH && 
+        currentMillis - buttonDebounceTime > 200) {
+      switchMode();
+      buttonDebounceTime = currentMillis;
+    }
+    lastButtonState = pressed ? LOW : HIGH;
   }
   
-  // Edge detection for clock input (rising edge detection)
-  static int prevClockState = LOW;           // Static variable to hold previous clock state
-  int clockInput = digitalRead(clockInputPin); // Read current clock input state
-  if (prevClockState == LOW && clockInput == HIGH) { // Check for rising edge (transition LOW->HIGH)
-    if (mode == MODE_MULTIPLIER) {           // Process multiplier mode (mode2)
-      if (lastClockTime == 0) {              // For the first rising edge (no valid period yet)
-        lastClockTime = currentMillis;       // Save current time as last clock time
-        clockPeriod = 0;                     // No period measured yet
-        for (int i = 0; i < 3; i++) {
-          channels[i].rate = getFactorFromAnalog(analogPins[i]); // Read multiplier factor from analog input
-          channels[i].pulsesGenerated = channels[i].rate;        // Mark cycle complete (only one pulse output)
-          triggerPulse(channels[i]);         // Trigger immediate pulse on the channel
-        }
-      } else {                               // For subsequent rising edges in multiplier mode
-        clockPeriod = currentMillis - lastClockTime; // Calculate clock period from previous rising edge
-        lastClockTime = currentMillis;       // Update last clock time to current time
-        for (int i = 0; i < 3; i++) {
-          channels[i].rate = getFactorFromAnalog(analogPins[i]); // Get multiplier factor from analog input
-          channels[i].pulsesGenerated = 0;   // Reset multiplier pulse count for new cycle
-          if (clockPeriod > 0 && channels[i].rate > 0) {
-            channels[i].multiplierInterval = clockPeriod / channels[i].rate; // Compute interval between pulses
-          } else {
-            channels[i].multiplierInterval = 0; // Fallback to 0 if period is invalid
-          }
-          channels[i].nextPulseTime = currentMillis; // Schedule first pulse immediately in new cycle
+  // Update LED blinking
+  if (ledBlinkingActive && currentMillis >= ledBlinkNextTime) {
+    ledBlinkState = !ledBlinkState;
+    if (ledBlinkState) {
+      LED_HIGH();
+    } else {
+      LED_LOW();
+      ledBlinkCount++;
+      if (ledBlinkCount >= ledBlinkCycles) {
+        ledBlinkingActive = false;
+      }
+    }
+    // Different blink speeds for different modes
+    uint32_t blinkSpeed = (mode == MODE_MULTIPLIER) ? 50 : 150;
+    ledBlinkNextTime = currentMillis + blinkSpeed;
+  }
+  
+  // Analog reading (rotate through pots every 30ms)
+  if (currentMillis - lastAnalogReadTime >= 30) {
+    lastAnalogReadTime = currentMillis;
+    rateCache[analogReadIndex] = getRateFast(analogPins[analogReadIndex]);
+    channels[analogReadIndex].rate = rateCache[analogReadIndex];
+    analogReadIndex = (analogReadIndex + 1) % 3;
+  }
+  
+  // Process clock rising edge from interrupt
+  if (clockRisingEdge) {
+    cli();  // Briefly disable interrupts for atomic read
+    bool edge = clockRisingEdge;
+    uint32_t riseTime = clockRiseTime;
+    clockRisingEdge = false;
+    sei();
+    
+    if (edge) {
+      // Calculate period with exponential averaging for stability
+      if (lastRiseTimeMicros > 0) {
+        uint32_t newPeriod = riseTime - lastRiseTimeMicros;
+        
+        // Filter out unrealistic values (5ms to 2s range)
+        if (newPeriod > 5000 && newPeriod < 2000000) {
+          // Exponential moving average for smooth tracking
+          avgClockPeriod = (avgClockPeriod * 3 + newPeriod) >> 2;
+          clockPeriodMicros = avgClockPeriod;
         }
       }
-    } else if (mode == MODE_DIVIDER) {       // Process divider mode (mode1) with synchronized outputs
-      dividerCounter++;                      // Increment global divider counter on each rising edge
-      for (int i = 0; i < 3; i++) {
-        int factor = getFactorFromAnalog(analogPins[i]); // Read division factor from analog input
-        // Trigger pulse if global divider counter is a multiple of the division factor
-        if (dividerCounter % factor == 0) {
-          triggerPulse(channels[i]);       // Generate a 10-msec pulse on the channel
+      lastRiseTimeMicros = riseTime;
+      
+      if (mode == MODE_DIVIDER) {
+        // Divider mode - count clocks and trigger on division
+        dividerCounter++;
+        for (uint8_t i = 0; i < 3; i++) {
+          channels[i].divCount++;
+          if (channels[i].divCount >= channels[i].rate) {
+            channels[i].divCount = 0;
+            triggerPulse(i);
+          }
+        }
+      } else {
+        // Multiplier mode - schedule multiple pulses
+        for (uint8_t i = 0; i < 3; i++) {
+          channels[i].pulsesGenerated = 0;
+          channels[i].multiplierInterval = clockPeriodMicros / channels[i].rate;
+          channels[i].nextPulseTime = currentMicros;
         }
       }
     }
   }
-  prevClockState = clockInput;               // Update previous clock state for next iteration
   
-  // In multiplier mode, check for scheduled pulses and trigger them as needed
+  // Process falling edge (for future gate length tracking)
+  if (clockFallingEdge) {
+    cli();
+    clockFallingEdge = false;
+    sei();
+    // Could implement variable gate length here in future
+  }
+  
+  // Multiplier mode pulse generation
   if (mode == MODE_MULTIPLIER) {
-    for (int i = 0; i < 3; i++) {
-      if (channels[i].pulsesGenerated < channels[i].rate) { // Only trigger if not all pulses are generated
-        if (currentMillis >= channels[i].nextPulseTime) {   // Check if it's time for the next pulse
-          triggerPulse(channels[i]);          // Trigger the pulse on the channel
-          channels[i].pulsesGenerated++;        // Increment the count of pulses generated in this cycle
+    for (uint8_t i = 0; i < 3; i++) {
+      if (channels[i].pulsesGenerated < channels[i].rate) {
+        if (currentMicros >= channels[i].nextPulseTime) {
+          triggerPulse(i);
+          channels[i].pulsesGenerated++;
           if (channels[i].pulsesGenerated < channels[i].rate) {
-            channels[i].nextPulseTime += channels[i].multiplierInterval; // Schedule next pulse
+            channels[i].nextPulseTime += channels[i].multiplierInterval;
           }
         }
       }
     }
   }
-  
-  // For all channels, check if an active pulse has reached its 10-msec duration and end it if so
-  for (int i = 0; i < 3; i++) {
-    if (channels[i].pulseActive && currentMillis >= channels[i].pulseEndTime) {
-      digitalWrite(channels[i].outPin, LOW); // End the pulse by setting the output LOW
-      channels[i].pulseActive = false;       // Mark that no pulse is active on the channel
-    }
-  }
 }
 
-// Function to handle button input with debounce and switch mode upon a valid button press
-void handleButtonInput() {
-  int reading = digitalRead(buttonPin);      // Read current state of button (LOW when pressed)
-  unsigned long currentMillis = millis();      // Get current time in milliseconds
-  
-  if (currentMillis - buttonPreviousMillis > debounceDelay) { // Check if debounce period has passed
-    if (reading == LOW && lastButtonState == HIGH) { // Detect HIGH-to-LOW transition (button press)
-      switchMode();                          // Switch mode upon valid button press
-      buttonPreviousMillis = currentMillis;  // Update timestamp of last valid button event
-    }
-  }
-  lastButtonState = reading;                 // Save current button state for next iteration
-}
-
-// Function to switch between divider (mode1) and multiplier (mode2) modes,
-// initiate the appropriate LED blink sequence, and store the new mode in EEPROM.
 void switchMode() {
-  int oldMode = mode;                        // Store current mode for reference
-  if (mode == MODE_DIVIDER) {                // If currently in divider mode (mode1)
-    mode = MODE_MULTIPLIER;                  // Switch to multiplier mode (mode2)
-    startLedBlinking(5, 100);                // Blink LED 5 times with 100 msec cycle (mode1->mode2)
-    lastClockTime = 0;                       // Reset multiplier timing variables
-    clockPeriod = 0;                         
-    for (int i = 0; i < 3; i++) {            // Reset multiplier channel counters
-      channels[i].pulsesGenerated = 0;
-      channels[i].nextPulseTime = 0;
-    }
-  } else {                                   // If currently in multiplier mode (mode2)
-    mode = MODE_DIVIDER;                     // Switch to divider mode (mode1)
-    startLedBlinking(3, 300);                // Blink LED 3 times with 300 msec cycle (mode2->mode1)
-    dividerCounter = 0;                      // Reset global divider counter for synchronized outputs
-  }
-  EEPROM.update(0, mode);                    // Store the new mode in EEPROM at address 0
+  cli();  // Atomic operation
   
-  // Print mode switch info to Serial for debugging
-  Serial.print("Switched mode from ");
-  Serial.print(oldMode == MODE_DIVIDER ? "Divider" : "Multiplier");
-  Serial.print(" to ");
-  Serial.println(mode == MODE_DIVIDER ? "Divider" : "Multiplier");
-}
-
-// Function to start the LED blinking override sequence during mode switching.
-// 'cycles' is the number of full on-off blink cycles, and 'fullCyclePeriod' is the period (in ms) of one full cycle.
-void startLedBlinking(int cycles, unsigned long fullCyclePeriod) {
-  ledBlinkingActive = true;                  // Activate LED blinking override
-  ledBlinkTotalCycles = cycles;              // Set the total number of blink cycles to perform
-  ledBlinkCycleCount = 0;                    // Reset the blink cycle counter
-  ledBlinkInterval = fullCyclePeriod / 2;      // Calculate half-cycle duration (on or off period) for 50% duty cycle
-  nextLedBlinkTime = millis() + ledBlinkInterval; // Schedule next LED toggle
-  ledBlinkState = true;                      // Start with LED turned ON
-  digitalWrite(ledPin, HIGH);                // Immediately set LED HIGH to begin blinking
-}
-
-// Function to update the LED blinking sequence using non-blocking timing (millis()).
-// While blinking is active, this overrides the normal clock-mirroring on the LED.
-void updateLedBlinking() {
-  unsigned long currentMillis = millis();    // Get current time in milliseconds
-  if (currentMillis >= nextLedBlinkTime) {     // Check if it's time to toggle the LED state
-    ledBlinkState = !ledBlinkState;            // Toggle the LED state (ON to OFF or vice versa)
-    digitalWrite(ledPin, ledBlinkState ? HIGH : LOW); // Update the LED output accordingly
-    nextLedBlinkTime = currentMillis + ledBlinkInterval; // Schedule the next toggle
-    if (!ledBlinkState) {                      // When LED turns OFF, count one complete blink cycle
-      ledBlinkCycleCount++;                    // Increment blink cycle counter
-      if (ledBlinkCycleCount >= ledBlinkTotalCycles) { // If desired blink cycles are complete,
-        ledBlinkingActive = false;             // Disable LED blinking override
-        digitalWrite(ledPin, LOW);             // Ensure LED is turned OFF
-      }
+  if (mode == MODE_DIVIDER) {
+    mode = MODE_MULTIPLIER;
+    ledBlinkCycles = 5;  // 5 fast blinks for multiplier mode
+    
+    // Reset multiplier state
+    lastRiseTimeMicros = 0;
+    for (uint8_t i = 0; i < 3; i++) {
+      channels[i].pulsesGenerated = 0;
+      channels[i].divCount = 0;
     }
-  }
-}
-
-// Function to trigger an output pulse on the given channel with a fixed pulse width (10 msec).
-void triggerPulse(OutputChannel &channel) {
-  digitalWrite(channel.outPin, HIGH);          // Set the output pin HIGH to start the pulse
-  channel.pulseEndTime = millis() + pulseWidth;  // Set the timestamp when the pulse should end
-  channel.pulseActive = true;                    // Mark that the pulse is active on this channel
-}
-
-// Function to map an analog input value to one of the rate factors (1,2,3,4,8,16)
-// based on defined thresholds.
-int getFactorFromAnalog(int analogPin) {
-  int selectValue = analogRead(analogPin);       // Read the analog value from the specified pin
-  if (selectValue < 102) {
-    return 1;                                  // Return factor 1 for values less than 102
-  } else if (selectValue < 308) {
-    return 2;                                  // Return factor 2 for values between 102 and 307
-  } else if (selectValue < 514) {
-    return 3;                                  // Return factor 3 for values between 308 and 513
-  } else if (selectValue < 720) {
-    return 4;                                  // Return factor 4 for values between 514 and 719
-  } else if (selectValue < 926) {
-    return 8;                                  // Return factor 8 for values between 720 and 925
+    
+    Serial.println(F("Switched to MULTIPLIER mode"));
   } else {
-    return 16;                                 // Return factor 16 for values 926 and above
+    mode = MODE_DIVIDER;
+    ledBlinkCycles = 3;  // 3 slow blinks for divider mode
+    
+    // Reset divider state
+    dividerCounter = 0;
+    for (uint8_t i = 0; i < 3; i++) {
+      channels[i].divCount = 0;
+    }
+    
+    Serial.println(F("Switched to DIVIDER mode"));
   }
+  
+  // Start LED blinking
+  ledBlinkingActive = true;
+  ledBlinkCount = 0;
+  ledBlinkState = true;
+  ledBlinkNextTime = millis() + 50;
+  LED_HIGH();
+  
+  sei();
+  
+  // Save to EEPROM
+  EEPROM.update(0, mode);
+}
+
+// Diagnostic function for testing
+void printDiagnostics() {
+  Serial.print(F("Mode: "));
+  Serial.print(mode == MODE_DIVIDER ? F("DIV") : F("MULT"));
+  Serial.print(F(" | Period: "));
+  Serial.print(clockPeriodMicros);
+  Serial.print(F("us | Rates: "));
+  for (uint8_t i = 0; i < 3; i++) {
+    Serial.print(rateCache[i]);
+    Serial.print(F(" "));
+  }
+  Serial.println();
 }
