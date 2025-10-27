@@ -1,0 +1,142 @@
+name: Build and Release Firmware
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  # Workflow executes on semantic version tag
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build_mod1:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        firmware: [
+          "MOD1_3LFO",
+          "MOD1_ADSR",
+          "MOD1_clock_div_multi",
+          "MOD1_EG",
+          "MOD1_Euclid",
+          "MOD1_LFO",
+          "MOD1_Logic",
+          "MOD1_randomCVsequencer",
+          "MOD1_square_vco",
+          "MOD1_SyncLFO",
+          "MOD1_TapTempoClock",
+          "MOD1_TiggerBurst"
+        ]
+        board: ["arduino:avr:nano", "arduino:avr:nano:cpu=atmega328old"]
+        include:
+          - board: arduino:avr:nano
+            boardpath: nano
+          - board: arduino:avr:nano:cpu=atmega328old
+            boardpath: nanoOldBootloader
+
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v1.1.1
+
+      - name: Install Arduino platform and libraries
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install arduino:avr
+
+      - name: Compile sketch and rename output file for release
+        working-directory: ./Firmware
+        run: |
+          # Map firmware names to their directory names
+          case "${{ matrix.firmware }}" in
+            "MOD1_3LFO")
+              SKETCH_DIR="3lfo"
+              ;;
+            "MOD1_ADSR")
+              SKETCH_DIR="adsr"
+              ;;
+            "MOD1_clock_div_multi")
+              SKETCH_DIR="clk_div_multi"
+              ;;
+            "MOD1_EG")
+              SKETCH_DIR="eg"
+              ;;
+            "MOD1_Euclid")
+              SKETCH_DIR="euclid"
+              ;;
+            "MOD1_LFO")
+              SKETCH_DIR="lfo"
+              ;;
+            "MOD1_Logic")
+              SKETCH_DIR="logic"
+              ;;
+            "MOD1_randomCVsequencer")
+              SKETCH_DIR="random_cv_seq"
+              ;;
+            "MOD1_square_vco")
+              SKETCH_DIR="square_vco"
+              ;;
+            "MOD1_SyncLFO")
+              SKETCH_DIR="sync_lfo"
+              ;;
+            "MOD1_TapTempoClock")
+              SKETCH_DIR="tap_tempo_clock"
+              ;;
+            "MOD1_TiggerBurst")
+              SKETCH_DIR="trigger_burst"
+              ;;
+          esac
+
+          arduino-cli compile -v -b ${{ matrix.board}} ${SKETCH_DIR} -e --output-dir=./build/${{ matrix.boardpath }}
+          mkdir -p ./release
+          cp ./build/${{ matrix.boardpath }}/${{ matrix.firmware }}.ino.hex ./release/${{ matrix.firmware }}.${{ matrix.boardpath }}.hex
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.boardpath }}-${{ matrix.firmware }}
+          path: ./Firmware/release/*.hex
+
+  release:
+    needs: [build_mod1]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: releases/
+
+      - name: Display structure of downloaded files
+        run: ls -R
+
+      - name: Create Release and attach files
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: releases/**/*.hex
+          generate_release_notes: true
+
+  # Trigger the Hugo deployment on modulove.github.io after successful release
+  trigger_hugo_deploy:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Trigger Hugo deployment workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.MODULOVE_DEPLOY_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'modulove',
+              repo: 'modulove.github.io',
+              workflow_id: 'hugo.yml',
+              ref: 'main'
+            });
