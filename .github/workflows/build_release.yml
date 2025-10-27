@@ -52,6 +52,7 @@ jobs:
           arduino-cli core install arduino:avr
 
       - name: Compile sketch and rename output file for release
+        working-directory: ./Firmware
         run: |
           # Map firmware names to their directory names
           case "${{ matrix.firmware }}" in
@@ -93,7 +94,7 @@ jobs:
               ;;
           esac
 
-          arduino-cli compile -v -b ${{ matrix.board}} Firmware/${SKETCH_DIR} -e --output-dir=./build/${{ matrix.boardpath }}
+          arduino-cli compile -v -b ${{ matrix.board}} ${SKETCH_DIR} -e --output-dir=./build/${{ matrix.boardpath }}
           mkdir -p ./release
           cp ./build/${{ matrix.boardpath }}/${{ matrix.firmware }}.ino.hex ./release/${{ matrix.firmware }}.${{ matrix.boardpath }}.hex
 
@@ -101,7 +102,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts-${{ matrix.boardpath }}-${{ matrix.firmware }}
-          path: ./release/*.hex
+          path: ./Firmware/release/*.hex
 
   release:
     needs: [build_mod1]
