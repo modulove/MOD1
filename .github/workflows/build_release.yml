@@ -96,7 +96,7 @@ jobs:
 
           arduino-cli compile -v -b ${{ matrix.board}} ${SKETCH_DIR} -e --output-dir=./build/${{ matrix.boardpath }}
           mkdir -p ./release
-          cp ./build/${{ matrix.boardpath }}/${{ matrix.firmware }}.ino.hex ./release/${{ matrix.firmware }}.${{ matrix.boardpath }}.hex
+          cp ./build/${{ matrix.boardpath }}/${SKETCH_DIR}.ino.hex ./release/${{ matrix.firmware }}.${{ matrix.boardpath }}.hex
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
