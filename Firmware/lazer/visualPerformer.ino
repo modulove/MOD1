@@ -113,7 +113,16 @@ enum CVInputMode : uint8_t {
   CVIN_DISABLED = 0,
   CVIN_CLOCK,
   CVIN_MOD_DEPTH,
-  CVIN_TRIGGER,
+  CVIN_MORPH_TIME,
+  CVIN_PRESET_SELECT,
+  CVIN_LFO_RATE,
+  CVIN_ROTATION_SPEED,
+  CVIN_ZOOM,
+  CVIN_XY_SCALE,
+  CVIN_PATTERN_BLEND,
+  CVIN_RANDOMIZE,
+  CVIN_QUANTIZE_XY,
+  CVIN_FREEZE,
   CVIN_COUNT
 };
 
@@ -142,6 +151,10 @@ struct Store {
 static const uint16_t MAGIC   = 0x4D31;
 static const uint8_t  VERSION = 4;
 
+
+// ===================== Triple output struct =====================
+struct Triple{ uint8_t a,b,c; };
+
 // ===================== Globals =====================
 Store   gStore;
 Preset  cur;      // current (live, morphed)
@@ -162,14 +175,14 @@ uint8_t g_c = 128;
 CVInputMode g_cvInputMode = CVIN_DISABLED;
 bool g_cvLastState = false;
 uint16_t g_cvModDepth = 0;  // 0..1023 from CV input
+uint8_t g_cvPresetLast = 0;  // For preset select change detection
+bool g_cvFreeze = false;  // Freeze state
+uint8_t g_frozenA = 128, g_frozenB = 128, g_frozenC = 128;  // Frozen values
 
 enum BtnState {B_IDLE, B_DOWN, B_LONGED};
 BtnState bstate = B_IDLE;
 unsigned long downAt=0, lastRelease=0;
 bool dcArmed=false; // double-click
-
-// ===================== Triple output struct =====================
-struct Triple{ uint8_t a,b,c; };
 
 // ===================== Math helpers =====================
 static inline uint8_t clampU8(int v){ if(v<0) return 0; if(v>255) return 255; return (uint8_t)v; }
@@ -280,28 +293,95 @@ void processCVInput() {
   
   bool cvHigh = (cvRaw > 512);  // Simple threshold at 2.5V
   
-  // Rising edge detection
-  if(cvHigh && !g_cvLastState) {
-    switch(g_cvInputMode) {
-      case CVIN_CLOCK:
-        // Advance to next preset
+  // Process based on mode
+  switch(g_cvInputMode) {
+    
+    case CVIN_CLOCK:
+      // Rising edge detection - advance to next preset
+      if(cvHigh && !g_cvLastState) {
         gStore.active = (gStore.active + 1) & 7;
         startMorphTo(gStore.slots[gStore.active], gStore.slots[gStore.active].morphMs);
         pickupP1 = pickupP2 = pickupP3 = true;
         saveStore();
         Serial.print("CLK P");
         Serial.println(gStore.active);
-        break;
-        
-      case CVIN_TRIGGER:
-        // Recall current preset (reset morph)
-        startMorphTo(gStore.slots[gStore.active], gStore.slots[gStore.active].morphMs);
-        Serial.println("TRIG");
-        break;
-        
-      default:
-        break;
-    }
+      }
+      break;
+      
+    case CVIN_MOD_DEPTH:
+      // Handled directly in mode engines (modulates LFO depth)
+      // g_cvModDepth is read by modeMixer() and modeLFO()
+      break;
+      
+    case CVIN_MORPH_TIME:
+      // CV controls morph duration (0V = 0ms, 5V = 4000ms)
+      morphDur = map(g_cvModDepth, 0, 1023, 0, 4000);
+      break;
+      
+    case CVIN_PRESET_SELECT:
+      // CV directly selects preset (8 quantized steps)
+      {
+        uint8_t newPreset = map(g_cvModDepth, 0, 1023, 0, 7);
+        if(newPreset != g_cvPresetLast) {
+          g_cvPresetLast = newPreset;
+          gStore.active = newPreset;
+          startMorphTo(gStore.slots[newPreset], gStore.slots[newPreset].morphMs);
+          pickupP1 = pickupP2 = pickupP3 = true;
+          saveStore();
+          Serial.print("CV P");
+          Serial.println(newPreset);
+        }
+      }
+      break;
+      
+    case CVIN_LFO_RATE:
+      // CV controls global LFO rate - handled in mode engines
+      // Modes will read g_cvModDepth to scale their LFO frequencies
+      break;
+      
+    case CVIN_ROTATION_SPEED:
+      // CV controls rotation/detune speed - handled in modeRotate()
+      break;
+      
+    case CVIN_ZOOM:
+      // CV controls zoom/scale - handled in modeRotate()
+      break;
+      
+    case CVIN_XY_SCALE:
+      // CV controls XY pad scale - handled in modeManualXY()
+      break;
+      
+    case CVIN_PATTERN_BLEND:
+      // CV overrides POT1 for pattern blend - handled in modeMixer()
+      break;
+      
+    case CVIN_RANDOMIZE:
+      // Rising edge adds random offset
+      if(cvHigh && !g_cvLastState) {
+        int amt = map(g_cvModDepth, 0, 1023, 0, 64);
+        // Random offsets applied directly to current preset anchors
+        cur.baseA = clampU8(cur.baseA + random(-amt, amt+1));
+        cur.baseB = clampU8(cur.baseB + random(-amt, amt+1));
+        cur.baseC = clampU8(cur.baseC + random(-amt, amt+1));
+        Serial.println("RAND");
+      }
+      break;
+      
+    case CVIN_QUANTIZE_XY:
+      // CV controls grid resolution - handled in modeManualXY()
+      break;
+      
+    case CVIN_FREEZE:
+      // Gate input - high = freeze outputs
+      g_cvFreeze = cvHigh;
+      if(cvHigh && !g_cvLastState) {
+        // Capture current values on freeze start
+        Serial.println("FRZ");
+      }
+      break;
+      
+    default:
+      break;
   }
   
   g_cvLastState = cvHigh;
@@ -359,7 +439,9 @@ static inline bool btn(){ return !(PIND & (1<<PD4)); }
 Triple modeMixer(uint8_t p1,uint8_t p2,uint8_t p3,float dt){
   // Anchors A (cur.baseA), B (cur.baseB), C (cur.baseC)
   // P1 blends A<->B, P2 blends (AB)<->C, P3 = LFO depth
-  float tAB = p1/255.0f;
+  
+  // CV can override POT1 for pattern blend
+  float tAB = (g_cvInputMode == CVIN_PATTERN_BLEND) ? (g_cvModDepth / 1023.0f) : (p1/255.0f);
   float tABC= p2/255.0f;
 
   // base crossfades
@@ -368,6 +450,12 @@ Triple modeMixer(uint8_t p1,uint8_t p2,uint8_t p3,float dt){
 
   // LFO on top (to A & B symmetrically)
   float hz = u8ToHz(cur.lfoRateU8);
+  
+  // CV can modulate LFO rate
+  if(g_cvInputMode == CVIN_LFO_RATE) {
+    hz = mapf(g_cvModDepth, 0, 1023, 0.02f, 10.0f);
+  }
+  
   lfo1.phase += hz*dt; if(lfo1.phase>1) lfo1.phase-=floorf(lfo1.phase);
   float l = sine(lfo1.phase); // -1..+1
 
@@ -385,8 +473,16 @@ Triple modeMixer(uint8_t p1,uint8_t p2,uint8_t p3,float dt){
 Triple modeRotate(uint8_t p1,uint8_t p2,uint8_t p3,float dt){
   // Emulate rotate/zoom by differential detune + slow phase drift
   // P1 = detune amount B, P2 = zoom (both), P3 = drift speed
-  float det = mapf(p1,0,255, -40, +40);   // counts to add/sub
-  float zoom= mapf(p2,0,255,  0.5f, 1.5f);
+  
+  // CV can override rotation speed (detune)
+  float det = (g_cvInputMode == CVIN_ROTATION_SPEED) ? 
+    mapf(g_cvModDepth, 0, 1023, -60, +60) : 
+    mapf(p1, 0, 255, -40, +40);
+  
+  // CV can override zoom
+  float zoom = (g_cvInputMode == CVIN_ZOOM) ? 
+    mapf(g_cvModDepth, 0, 1023, 0.3f, 2.0f) : 
+    mapf(p2, 0, 255, 0.5f, 1.5f);
 
   // slow drift on top
   float driftHz = mapf(p3,0,255, 0.00f, 0.50f);
@@ -404,7 +500,12 @@ Triple modeRotate(uint8_t p1,uint8_t p2,uint8_t p3,float dt){
 Triple modeLFO(uint8_t p1,uint8_t p2,uint8_t p3,float dt){
   // Dual LFO driver:
   // P1 = rate, P2 = depth A, P3 = depth B
-  float hz = mapf(p1,0,255, 0.02f, 8.0f);
+  
+  // CV can override LFO rate
+  float hz = (g_cvInputMode == CVIN_LFO_RATE) ? 
+    mapf(g_cvModDepth, 0, 1023, 0.02f, 10.0f) :
+    mapf(p1, 0, 255, 0.02f, 8.0f);
+    
   lfo1.phase += hz*dt; if(lfo1.phase>1) lfo1.phase-=floorf(lfo1.phase);
   lfo2.phase += hz*dt*0.667f; if(lfo2.phase>1) lfo2.phase-=floorf(lfo2.phase);
 
@@ -459,7 +560,30 @@ Triple modeManualXY(uint8_t p1, uint8_t p2, uint8_t p3, float dt){
   // Manual XY mode: direct control from WebSerial
   // Pots have no effect in this mode
   (void)p1; (void)p2; (void)p3; (void)dt;
-  return { g_xyA, g_xyB, g_c };
+  
+  uint8_t outA = g_xyA;
+  uint8_t outB = g_xyB;
+  
+  // CV can scale XY movements
+  if(g_cvInputMode == CVIN_XY_SCALE) {
+    float scale = mapf(g_cvModDepth, 0, 1023, 0.2f, 2.0f);
+    // Center at 128, scale from there
+    int a = 128 + int((g_xyA - 128) * scale);
+    int b = 128 + int((g_xyB - 128) * scale);
+    outA = clampU8(a);
+    outB = clampU8(b);
+  }
+  
+  // CV can quantize XY to grid
+  if(g_cvInputMode == CVIN_QUANTIZE_XY) {
+    // Map CV to grid resolution: 0V = no quantize (256 steps), 5V = 4 steps
+    uint8_t steps = map(g_cvModDepth, 0, 1023, 256, 4);
+    uint8_t stepSize = 256 / steps;
+    outA = (outA / stepSize) * stepSize;
+    outB = (outB / stepSize) * stepSize;
+  }
+  
+  return { outA, outB, g_c };
 }
 
 // ===================== Serial Command Parser =====================
@@ -739,6 +863,19 @@ void loop(){
     case MODE_PERFORMER: out = modePerformer(lastP1,lastP2,lastP3, dt ); break;
     case MODE_RATIOS:    out = modeRatios( lastP1, lastP2, lastP3, dt ); break;
     case MODE_MANUAL_XY: out = modeManualXY(lastP1,lastP2,lastP3, dt ); break;
+  }
+
+  // ----- Apply FREEZE if CV input is in freeze mode -----
+  if(g_cvInputMode == CVIN_FREEZE && g_cvFreeze) {
+    // Use frozen values instead
+    out.a = g_frozenA;
+    out.b = g_frozenB;
+    out.c = g_frozenC;
+  } else {
+    // Update frozen values when not frozen (so we have latest to hold)
+    g_frozenA = out.a;
+    g_frozenB = out.b;
+    g_frozenC = out.c;
   }
 
   // ----- Write CVs (using optimized direct register access) -----
