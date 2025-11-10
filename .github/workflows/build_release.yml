@@ -19,6 +19,7 @@ jobs:
         firmware: [
           "MOD1_3LFO",
           "MOD1_ADSR",
+          "MOD1_Chipz",
           "MOD1_clock_div_multi",
           "MOD1_EG",
           "MOD1_Euclid",
@@ -62,6 +63,9 @@ jobs:
             "MOD1_ADSR")
               SKETCH_DIR="adsr"
               ;;
+            "MOD1_Chipz")
+              SKETCH_DIR="chipz"
+              ;;              
             "MOD1_clock_div_multi")
               SKETCH_DIR="clk_div_multi"
               ;;
