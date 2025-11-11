@@ -26,6 +26,7 @@ jobs:
           "MOD1_LFO",
           "MOD1_Logic",
           "MOD1_randomCVsequencer",
+          "MOD1_roseosc",
           "MOD1_square_vco",
           "MOD1_SyncLFO",
           "MOD1_TapTempoClock",
@@ -80,6 +81,9 @@ jobs:
               ;;
             "MOD1_Logic")
               SKETCH_DIR="logic"
+              ;;
+            "MOD1_roseosc")
+              SKETCH_DIR="roseosc"
               ;;
             "MOD1_randomCVsequencer")
               SKETCH_DIR="random_cv_seq"
