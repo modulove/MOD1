@@ -1,5 +1,5 @@
 /*
- * 3D KNOT OSCILLATOR  "KOSCILLATOR"
+ * KNOSCILLATOR 
  * 
  * 
  * Three beautiful knot patterns:
@@ -17,8 +17,7 @@
 #define POT1 A0  // Knot selection
 #define POT2 A1  // Waveform variation
 #define POT3 A2  // Frequency
-#define CV1 A3   // Knot morph
-#define CV2 A0   // Scale/zoom
+#define CV1 A3   // CV input - parameter based on mode
 #define LED_PIN 3
 #define BUTTON_PIN 4
 
@@ -29,6 +28,7 @@ volatile uint32_t phase = 0;
 volatile uint32_t phaseInc = 0;
 volatile uint8_t knotType = 0;     // 0, 1, or 2
 volatile uint8_t scale = 128;       // Zoom amount
+uint8_t cvMode = 0;                 // 0=knot selection, 1=scale, 2=frequency
 bool buttonHeld = false;
 
 // ═════════════════════════════════════════════════════════════════
@@ -206,42 +206,49 @@ void updateControls() {
   
   switch(counter & 0x07) {
     case 0: {
-      // POT1: Knot selection
+      // POT1: Knot selection (only if CV1 not in knot mode)
       int val = analogRead(POT1);
-      knotType = constrain(val / 342, 0, 2);  // 1024/3 = 342
-      break;
-    }
-    
-    case 1: {
-      // POT2: Scale/Zoom
-      int val = analogRead(POT2);
-      scale = map(val, 0, 1023, 64, 255);  // 0.5x to 2x zoom
-      break;
-    }
-    
-    case 2: {
-      // POT3: Frequency
-      int val = analogRead(POT3);
-      float freq = 0.1f + (val * 19.9f / 1023.0f);
-      phaseInc = (uint32_t)(((uint64_t)freq * 68719477ULL) >> 10);
-      break;
-    }
-    
-    case 3: {
-      // CV1: Knot selection (override POT1)
-      int val = analogRead(CV1);
-      if (val > 50) {  // Only if CV plugged in
-        knotType = constrain(val / 342, 0, 2);
+      if (cvMode != 0) {  // CV not controlling knot
+        knotType = constrain(val / 342, 0, 2);  // 1024/3 = 342
       }
       break;
     }
     
-    case 4: {
-      // CV2: Scale modulation
-      int val = analogRead(CV2);
+    case 1: {
+      // POT2: Scale/Zoom (only if CV1 not in scale mode)
+      int val = analogRead(POT2);
+      if (cvMode != 1) {  // CV not controlling scale
+        scale = map(val, 0, 1023, 64, 255);  // 0.5x to 2x zoom
+      }
+      break;
+    }
+    
+    case 2: {
+      // POT3: Frequency (only if CV1 not in frequency mode)
+      if (cvMode != 2) {  // CV not controlling frequency
+        int val = analogRead(POT3);
+        float freq = 0.1f + (val * 19.9f / 1023.0f);
+        phaseInc = (uint32_t)(((uint64_t)freq * 68719477ULL) >> 10);
+      }
+      break;
+    }
+    
+    case 3: {
+      // CV1: Parameter based on cvMode
+      int val = analogRead(CV1);
       if (val > 50) {  // Only if CV plugged in
-        uint8_t cvScale = map(val, 0, 1023, 64, 255);
-        scale = (scale + cvScale) >> 1;  // Blend with POT2
+        switch(cvMode) {
+          case 0:  // Knot selection
+            knotType = constrain(val / 342, 0, 2);
+            break;
+          case 1:  // Scale/Zoom
+            scale = map(val, 0, 1023, 64, 255);
+            break;
+          case 2:  // Frequency
+            float freq = 0.1f + (val * 19.9f / 1023.0f);
+            phaseInc = (uint32_t)(((uint64_t)freq * 68719477ULL) >> 10);
+            break;
+        }
       }
       break;
     }
@@ -249,33 +256,82 @@ void updateControls() {
 }
 
 // ═════════════════════════════════════════════════════════════════
-// LED UPDATE
+// LED UPDATE - Shows CV mode
 // ═════════════════════════════════════════════════════════════════
 void updateLED() {
-  static uint16_t counter = 0;
-  counter++;
+  static uint16_t blinkCounter = 0;
+  blinkCounter++;
   
-  // LED shows knot type
-  uint8_t brightness = 60 + (knotType * 60);
-  analogWrite(LED_PIN, brightness);
+  // LED blink pattern indicates CV mode
+  // Mode 0 (knot): slow blink (1 blink)
+  // Mode 1 (scale): medium blink (2 blinks)  
+  // Mode 2 (freq): fast blink (3 blinks)
+  
+  uint16_t period = 100;  // 100 x 10ms = 1 second
+  uint16_t phase = blinkCounter % period;
+  
+  bool ledOn = false;
+  
+  switch(cvMode) {
+    case 0:  // 1 blink
+      ledOn = (phase < 10);
+      break;
+    case 1:  // 2 blinks
+      ledOn = (phase < 10) || (phase >= 20 && phase < 30);
+      break;
+    case 2:  // 3 blinks
+      ledOn = (phase < 10) || (phase >= 20 && phase < 30) || (phase >= 40 && phase < 50);
+      break;
+  }
+  
+  digitalWrite(LED_PIN, ledOn ? HIGH : LOW);
 }
 
 // ═════════════════════════════════════════════════════════════════
-// BUTTON HANDLER (Optional - for future features)
+// BUTTON HANDLER - Short press cycles knots, long press cycles CV mode
 // ═════════════════════════════════════════════════════════════════
 void handleButton() {
   static uint8_t lastButton = HIGH;
+  static unsigned long pressStart = 0;
+  static bool longPressHandled = false;
+  
   uint8_t reading = digitalRead(BUTTON_PIN);
   
-  // Quick press: cycle through knot types
+  // Button pressed
   if (reading == LOW && lastButton == HIGH) {
-    knotType = (knotType + 1) % 3;
-    
-    // Quick flash
-    digitalWrite(LED_PIN, HIGH);
-    delay(100);
-    digitalWrite(LED_PIN, LOW);
-    delay(50);
+    pressStart = millis();
+    longPressHandled = false;
+  }
+  
+  // Button held - check for long press (500ms)
+  if (reading == LOW && !longPressHandled) {
+    if (millis() - pressStart >= 500) {
+      // Long press - cycle CV mode
+      cvMode = (cvMode + 1) % 3;
+      longPressHandled = true;
+      
+      // Long flash to indicate mode change
+      for(int i = 0; i < cvMode + 1; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(150);
+        digitalWrite(LED_PIN, LOW);
+        delay(150);
+      }
+    }
+  }
+  
+  // Button released
+  if (reading == HIGH && lastButton == LOW) {
+    if (!longPressHandled && millis() - pressStart < 500) {
+      // Short press - cycle knot type
+      knotType = (knotType + 1) % 3;
+      
+      // Quick flash
+      digitalWrite(LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(LED_PIN, LOW);
+      delay(50);
+    }
   }
   
   lastButton = reading;
@@ -313,6 +369,7 @@ void setup() {
   // Defaults
   knotType = 0;
   scale = 128;
+  cvMode = 0;  // Start with CV controlling knot selection
   phaseInc = (uint32_t)(((uint64_t)1 * 68719477ULL) >> 10);  // 1Hz
   
   digitalWrite(LED_PIN, HIGH);
@@ -338,32 +395,28 @@ void loop() {
 
 /*
  * ═══════════════════════════════════════════════════════════════
- * KNOSCILLATOR - ULTRA SIMPLE VERSION
+ * KNOSCILLATOR - CV MODE SWITCHING VERSION
  * ═══════════════════════════════════════════════════════════════
  * 
- * OPTIMIZATIONS:
- * - All 3D coordinates pre-projected to 2D
- * - No rotation calculations
- * - No floating point in ISR
- * - Just 2 table reads + simple scaling
- * - Total ISR time: ~30-40 CPU cycles
- * 
  * CONTROLS:
- * POT1: Select knot type (0=Trefoil, 1=Lissajous, 2=Torus)
- * POT2: Zoom/Scale (0.5x to 2x)
- * POT3: Frequency (0.1Hz - 20Hz)
- * CV1: Knot selection (overrides POT1)
- * CV2: Scale modulation
- * BUTTON: Quick press to cycle knot types
+ * POT1: Knot selection (0=Trefoil, 1=Lissajous, 2=Torus) - unless CV mode 0
+ * POT2: Zoom/Scale (0.5x to 2x) - unless CV mode 1
+ * POT3: Frequency (0.1Hz - 20Hz) - unless CV mode 2
+ * CV1 (A3): Modulates parameter based on CV mode
  * 
- * LED: Brightness shows knot type (dim=0, med=1, bright=2)
+ * BUTTON:
+ * - Short press: Cycle knot types
+ * - Long press (500ms): Cycle CV modulation mode
  * 
- * OSCILLOSCOPE VIEWING:
- * - Left output → X axis
- * - Right output → Y axis
- * - X-Y mode
- * - Start with POT3 left (slow)
- * - Adjust POT1 to see different patterns
- * - POT2 to zoom in/out
+ * CV MODES:
+ * Mode 0: CV1 controls knot selection (LED: 1 blink)
+ * Mode 1: CV1 controls scale/zoom (LED: 2 blinks)
+ * Mode 2: CV1 controls frequency (LED: 3 blinks)
+ * 
+ * LED INDICATOR:
+ * Blinks in pattern to show CV mode (count the blinks!)
+ * 
+ * When CV is plugged into CV1, it overrides the corresponding pot.
+ * When no CV is present (reading < 50), the pot controls the parameter.
  * 
  */
