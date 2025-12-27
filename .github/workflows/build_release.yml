@@ -81,7 +81,7 @@ jobs:
               SKETCH_DIR="euclid"
               ;;
               "MOD1_Lazer")
-              SKETCH_DIR="lazer"
+              SKETCH_DIR="visualPerformer"
               ;;
               "MOD1_Jinglz")
               SKETCH_DIR="jinglz"
