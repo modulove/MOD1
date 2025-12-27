@@ -80,6 +80,15 @@ jobs:
             "MOD1_Euclid")
               SKETCH_DIR="euclid"
               ;;
+              "MOD1_Lazer")
+              SKETCH_DIR="lazer"
+              ;;
+              "MOD1_Jinglz")
+              SKETCH_DIR="jinglz"
+              ;;
+              "MOD1_Gridz")
+              SKETCH_DIR="gridz"
+              ;;
             "MOD1_LFO")
               SKETCH_DIR="lfo"
               ;;
