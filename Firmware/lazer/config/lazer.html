@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MOD1 Visual Performer — WebSerial Controller v2</title>
+  <meta name="color-scheme" content="dark light">
+  <style>
+    :root {
+      --bg: canvas;
+      --fg: canvastext;
+      --muted: color-mix(in srgb, var(--fg) 70%, var(--bg));
+      --accent: dodgerblue;
+      --card: color-mix(in srgb, var(--bg) 92%, var(--fg));
+      --ok: #17b169; --warn:#e0a100; --bad:#d33;
+      --radius: 14px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --accent: deepskyblue; --card: color-mix(in srgb, var(--bg) 90%, var(--fg)); }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.35 ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial; background: var(--bg); color: var(--fg); }
+    header { display:flex; gap:12px; align-items:center; padding:14px 16px; border-bottom: 1px solid color-mix(in srgb, var(--fg) 12%, transparent); }
+    header h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+    .spacer { flex: 1; }
+    button, select, input[type="range"], input[type="text"] { font: inherit; color: inherit; }
+    button { padding: 8px 12px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent); background: var(--card); cursor: pointer; transition: all 0.15s; }
+    button:hover { background: color-mix(in srgb, var(--card) 85%, var(--fg)); }
+    button.primary { background: var(--accent); color: white; border-color: transparent; font-weight: 600; }
+    button.primary:hover { background: color-mix(in srgb, var(--accent) 85%, black); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    select { padding: 6px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent); background: var(--card); }
+
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+
+    main { display:grid; gap:16px; padding:16px; grid-template-columns: 1.2fr .8fr; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+    .card { background: var(--card); border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent); border-radius: var(--radius); padding: 14px; }
+    .card h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .4px; opacity:.9; display: flex; align-items: center; gap: 8px; }
+
+    .xy-wrap { display:grid; grid-template-rows: auto 1fr auto; gap:12px; }
+    .xy-pad { position: relative; width: 100%; aspect-ratio: 1 / 1; background: conic-gradient(from 0deg, transparent 0 25%, color-mix(in srgb, var(--accent) 20%, transparent) 0 100%) ,
+                                      radial-gradient(50% 50% at 50% 50%, color-mix(in srgb, var(--accent) 7%, transparent) 0 35%, transparent 36%);
+               border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent); overflow:hidden; cursor: crosshair; }
+    canvas#xy { display:block; width:100%; height:100%; }
+
+    .sliders { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .row { display:grid; grid-template-columns: 120px 1fr min-content; align-items:center; gap:10px; }
+    .row label { opacity:.9; font-size: 13px; }
+    .row output { width: 4ch; text-align:right; opacity:.8; font-weight: 600; font-size: 13px; }
+
+    .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+    .mode-btn { padding: 10px; font-size: 13px; text-align: center; border-radius: 10px; background: color-mix(in srgb, var(--bg) 70%, var(--card)); transition: all 0.2s; }
+    .mode-btn:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+    .mode-btn.active { background: var(--accent); color: white; font-weight: 600; }
+
+    .presets { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; }
+    .preset { padding:10px; border-radius: 10px; background: color-mix(in srgb, var(--bg) 70%, var(--card)); border: 1px dashed color-mix(in srgb, var(--fg) 18%, transparent); display:grid; gap:6px; }
+    .preset input[type="text"] { width:100%; padding:6px 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); background: var(--bg); font-size: 12px; }
+    .preset .controls { display:flex; gap:6px; }
+    .preset .controls button { font-size: 12px; padding: 6px 8px; }
+
+    .console { background: black; color: #9efe9e; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border-radius: var(--radius); padding: 12px; max-height: 220px; overflow: auto; font-size: 12px; line-height: 1.4; }
+    .console .bad { color: #ff6b6b; }
+    .console .ok { color: #51cf66; }
+    .console .warn { color: #ffd43b; }
+    .console .muted { opacity:.7; }
+
+    .cv-config { display: flex; gap: 10px; align-items: center; padding: 10px; background: color-mix(in srgb, var(--bg) 70%, var(--card)); border-radius: 10px; margin-top: 10px; }
+    .cv-config label { font-weight: 600; font-size: 13px; }
+    .cv-config select { flex: 1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MOD1 Visual Performer</h1>
+    <span class="badge" id="statusBadge">Disconnected</span>
+    <span class="spacer"></span>
+    <button id="connect" class="primary">Connect Device</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    <button id="getStatus" disabled>Get Status</button>
+  </header>
+
+  <main>
+    <section class="card xy-wrap">
+      <h2>
+        XY Control Pad 
+        <span class="badge">Manual Mode</span>
+      </h2>
+      <div class="xy-pad"><canvas id="xy"></canvas></div>
+      <div class="sliders">
+        <div class="row">
+          <label for="scale">Scale</label>
+          <input id="scale" type="range" min="0" max="200" value="100" />
+          <output id="scaleOut">100</output>
+        </div>
+        <div class="row">
+          <label for="offset">Offset (C)</label>
+          <input id="offset" type="range" min="0" max="255" value="128" />
+          <output id="offsetOut">128</output>
+        </div>
+        <div class="row">
+          <label for="morph">Morph (ms)</label>
+          <input id="morph" type="range" min="0" max="4000" value="800" />
+          <output id="morphOut">800</output>
+        </div>
+        <div class="row">
+          <label for="rate">Send Rate (Hz)</label>
+          <input id="rate" type="range" min="5" max="120" value="60" />
+          <output id="rateOut">60</output>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Performance Modes</h2>
+      <div class="mode-grid" id="modeGrid">
+        <button class="mode-btn" data-mode="0">0: Pattern Mixer</button>
+        <button class="mode-btn" data-mode="1">1: Rotate/Zoom</button>
+        <button class="mode-btn" data-mode="2">2: LFO Driver</button>
+        <button class="mode-btn" data-mode="3">3: Performer</button>
+        <button class="mode-btn" data-mode="4">4: Ratios</button>
+        <button class="mode-btn active" data-mode="5">5: Manual XY</button>
+      </div>
+      
+      <div class="cv-config">
+        <label for="cvMode">CV Input:</label>
+        <select id="cvMode">
+          <option value="0" selected>0: Disabled</option>
+          <option value="1">1: Clock (Preset Advance)</option>
+          <option value="2">2: Modulation Depth</option>
+          <option value="3">3: Morph Time</option>
+          <option value="4">4: Preset Select (0-7)</option>
+          <option value="5">5: LFO Rate</option>
+          <option value="6">6: Rotation Speed</option>
+          <option value="7">7: Zoom</option>
+          <option value="8">8: XY Scale</option>
+          <option value="9">9: Pattern Blend</option>
+          <option value="10">10: Randomize</option>
+          <option value="11">11: Quantize XY</option>
+          <option value="12">12: Freeze</option>
+        </select>
+      </div>
+      <div style="margin-top: 8px; padding: 8px; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 8px; font-size: 12px; line-height: 1.4;" id="cvDesc">
+        CV input disabled
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Show Presets</h2>
+      <div class="presets" id="presets"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
+        <button id="loadAll">Load All Names</button>
+        <button id="dumpAll">Dump All</button>
+        <span class="muted" style="font-size: 12px;">Tip: Double-click hardware button to cycle modes on device</span>
+      </div>
+    </section>
+
+    <section class="card" style="grid-column: 1 / -1;">
+      <h2>Serial Console</h2>
+      <pre class="console" id="log"></pre>
+      <div style="margin-top: 8px; display: flex; gap: 8px;">
+        <button id="clearLog">Clear Log</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+  // ---------- Helpers ----------
+  const $ = sel => document.querySelector(sel);
+  const $$ = sel => document.querySelectorAll(sel);
+  
+  function log(msg, cls='') { 
+    const el = document.createElement('div'); 
+    const timestamp = new Date().toLocaleTimeString();
+    el.textContent = `[${timestamp}] ${msg}`; 
+    if (cls) el.className = cls; 
+    $('#log').appendChild(el); 
+    $('#log').scrollTop = 1e6; 
+  }
+  
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  // ---------- WebSerial Transport ----------
+  let port, reader, writer, readLoopAbort;
+  let connected = false;
+  let currentMode = 5;
+  const BAUD = 115200;
+
+  async function connect() {
+    if (!('serial' in navigator)) { 
+      alert('Web Serial not supported. Use Chrome/Edge/Arc (desktop/Android) or enable chrome://flags/#enable-experimental-web-platform-features'); 
+      return; 
+    }
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: BAUD });
+      writer = port.writable.getWriter();
+      readLoopAbort = new AbortController();
+      readLoop(port.readable, readLoopAbort.signal);
+      connected = true;
+      $('#connect').disabled = true; 
+      $('#disconnect').disabled = false;
+      $('#getStatus').disabled = false;
+      $('#statusBadge').textContent = 'Connected';
+      $('#statusBadge').style.background = 'color-mix(in srgb, var(--ok) 30%, transparent)';
+      $('#statusBadge').style.color = 'var(--ok)';
+      log('✓ Connected to MOD1 device', 'ok');
+      
+      // Initialize device
+      await new Promise(r => setTimeout(r, 500)); // Wait for Arduino reset
+      sendLine('MODE 5');
+      sendLine('MORPH ' + $('#morph').value);
+      sendLine('CVIN ' + $('#cvMode').value);
+      
+      // Update mode button highlight
+      updateModeButtons(5);
+    } catch (e) {
+      log('✗ Connection error: ' + e.message, 'bad');
+    }
+  }
+
+  async function disconnect() {
+    try {
+      readLoopAbort?.abort();
+      reader?.cancel();
+      writer?.releaseLock();
+      await port?.close();
+    } catch (e) {}
+    $('#connect').disabled = false; 
+    $('#disconnect').disabled = true;
+    $('#getStatus').disabled = true;
+    $('#statusBadge').textContent = 'Disconnected';
+    $('#statusBadge').style.background = 'color-mix(in srgb, var(--muted) 30%, transparent)';
+    $('#statusBadge').style.color = 'var(--muted)';
+    connected = false;
+    log('⚠ Disconnected from device', 'warn');
+  }
+
+  async function readLoop(stream, signal) {
+    reader = stream.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          const text = dec.decode(value).trim();
+          if(text.length > 0) {
+            // Color code responses
+            let cls = '';
+            if(text.includes('✓') || text.includes('OK')) cls = 'ok';
+            else if(text.includes('✗') || text.includes('ERROR')) cls = 'bad';
+            else if(text.includes('⚠')) cls = 'warn';
+            log(text, cls);
+          }
+        }
+      }
+    } catch (e) {
+      if (!signal.aborted) log('✗ Read error: ' + e.message, 'bad');
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  async function sendLine(s) {
+    if (!connected) return;
+    try { 
+      await writer.write(enc.encode(s + "\n")); 
+    } catch (e) { 
+      log('✗ Write error: ' + e.message, 'bad'); 
+    }
+  }
+
+  $('#connect').addEventListener('click', connect);
+  $('#disconnect').addEventListener('click', disconnect);
+  $('#getStatus').addEventListener('click', () => sendLine('STATUS'));
+  $('#clearLog').addEventListener('click', () => { $('#log').innerHTML = ''; });
+
+  // ---------- Mode Switching ----------
+  function updateModeButtons(mode) {
+    currentMode = mode;
+    $$('.mode-btn').forEach(btn => {
+      btn.classList.toggle('active', +btn.dataset.mode === mode);
+    });
+  }
+
+  $('#modeGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.mode-btn');
+    if(!btn) return;
+    const mode = +btn.dataset.mode;
+    sendLine('MODE ' + mode);
+    updateModeButtons(mode);
+  });
+
+  // ---------- CV Input Mode ----------
+  const cvDescriptions = [
+    'CV input disabled',
+    'Gate/trigger advances to next preset on rising edge',
+    'CV voltage (0-5V) controls LFO depth in Pattern Mixer & LFO Driver modes',
+    'CV voltage (0-5V) controls morph transition time (0-4000ms)',
+    'CV voltage selects preset directly: 0V=P0, 5V=P7 (8 steps)',
+    'CV voltage (0-5V) controls global LFO rate (0.02-10Hz)',
+    'CV voltage controls rotation/detune speed in Rotate/Zoom mode',
+    'CV voltage controls zoom/scale factor in Rotate/Zoom mode',
+    'CV voltage scales XY pad movements in Manual XY mode',
+    'CV voltage overrides POT1 for A↔B pattern blend in Pattern Mixer',
+    'Gate/trigger adds random offset to outputs (voltage controls amount)',
+    'CV voltage sets grid quantization in Manual XY mode (0V=smooth, 5V=4-step)',
+    'Gate high freezes all outputs (hold pattern)'
+  ];
+  
+  $('#cvMode').addEventListener('change', e => {
+    const mode = +e.target.value;
+    sendLine('CVIN ' + mode);
+    $('#cvDesc').textContent = cvDescriptions[mode] || 'Unknown mode';
+  });
+  
+  // Initialize description
+  $('#cvDesc').textContent = cvDescriptions[0];
+
+  // ---------- XY Pad ----------
+  const canvas = $('#xy');
+  const ctx = canvas.getContext('2d');
+  let padRect;
+  let pointerId = null;
+  let xNorm = 0.5, yNorm = 0.5; // 0..1
+  let raf;
+
+  function resizeCanvas() {
+    const box = canvas.getBoundingClientRect();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.round(box.width * dpr);
+    canvas.height = Math.round(box.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    padRect = canvas.getBoundingClientRect();
+    drawPad();
+  }
+  window.addEventListener('resize', resizeCanvas, { passive: true });
+  new ResizeObserver(resizeCanvas).observe(canvas);
+
+  function drawPad() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    ctx.clearRect(0,0,w,h);
+    
+    // Grid lines
+    ctx.globalAlpha = .35; 
+    ctx.lineWidth = 1; 
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--muted');
+    ctx.beginPath();
+    for (let i=1;i<4;i++){ 
+      const gx = (w/4)*i; 
+      const gy = (h/4)*i; 
+      ctx.moveTo(gx,0); ctx.lineTo(gx,h); 
+      ctx.moveTo(0,gy); ctx.lineTo(w,gy); 
+    }
+    ctx.stroke();
+    
+    // Crosshair
+    ctx.globalAlpha = .8;
+    const px = xNorm * w; 
+    const py = yNorm * h;
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+    ctx.beginPath();
+    ctx.moveTo(px, 0); ctx.lineTo(px, h);
+    ctx.moveTo(0, py); ctx.lineTo(w, py);
+    ctx.stroke();
+    
+    // Dot with glow
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+    ctx.beginPath(); 
+    ctx.arc(px, py, 7, 0, Math.PI*2);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent'); 
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  function setFromEvent(e){
+    const pt = (e.touches? e.touches[0] : e);
+    const r = padRect;
+    let x = (pt.clientX - r.left) / r.width; 
+    let y = (pt.clientY - r.top) / r.height;
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+    xNorm = x; yNorm = y; 
+    drawPad();
+  }
+
+  canvas.addEventListener('pointerdown', e=>{ 
+    pointerId = e.pointerId; 
+    canvas.setPointerCapture(pointerId); 
+    setFromEvent(e); 
+  });
+  canvas.addEventListener('pointermove', e=>{ 
+    if (pointerId!==null) setFromEvent(e); 
+  });
+  canvas.addEventListener('pointerup',   ()=>{ pointerId=null; });
+  canvas.addEventListener('pointercancel',()=>{ pointerId=null; });
+
+  // ---------- XY Sender ----------
+  function uiVal(id){ return +$(id).value; }
+  function uiText(id,v){ $(id).textContent = v; }
+
+  function uiUpdateLabels(){
+    uiText('#scaleOut', uiVal('#scale'));
+    uiText('#offsetOut', uiVal('#offset'));
+    uiText('#morphOut', uiVal('#morph'));
+    uiText('#rateOut', uiVal('#rate'));
+  }
+  
+  ['#scale','#offset','#morph','#rate'].forEach(sel=> $(sel).addEventListener('input', ()=>{
+    uiUpdateLabels();
+    if (sel==='#morph') sendLine('MORPH '+uiVal('#morph'));
+  }));
+  uiUpdateLabels();
+
+  let lastSend = 0;
+  function tick(ts){
+    const hz = uiVal('#rate');
+    const period = 1000/hz;
+    if (ts - lastSend >= period) {
+      lastSend = ts;
+      const scale = uiVal('#scale')/100;
+      let x = (xNorm - 0.5) * 2 * scale;
+      let y = (yNorm - 0.5) * 2 * scale;
+      x = Math.max(-1, Math.min(1, x));
+      y = Math.max(-1, Math.min(1, y));
+      const x8 = Math.round((x*0.5 + 0.5)*255);
+      const y8 = Math.round((y*0.5 + 0.5)*255);
+      const c8 = uiVal('#offset');
+      sendLine(`XY ${x8} ${y8}`);
+      sendLine(`C ${c8}`);
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+
+  // ---------- Presets UI ----------
+  const presetsEl = $('#presets');
+  function makePresetCard(i){
+    const wrap = document.createElement('div'); 
+    wrap.className='preset';
+    wrap.innerHTML = `
+      <strong style="font-size: 12px;">Preset ${i+1}</strong>
+      <input type="text" id="name${i}" placeholder="Name (local)"/>
+      <div class="controls">
+        <button data-act="load" data-i="${i}">Load</button>
+        <button data-act="save" data-i="${i}">Save</button>
+        <button data-act="dump" data-i="${i}">Info</button>
+      </div>`;
+    return wrap;
+  }
+  for (let i=0;i<8;i++) presetsEl.appendChild(makePresetCard(i));
+
+  presetsEl.addEventListener('click', e=>{
+    const b = e.target.closest('button'); 
+    if (!b) return;
+    const i = +b.dataset.i;
+    const act = b.dataset.act;
+    if (act==='load') sendLine('LOAD '+i);
+    if (act==='save') sendLine('SAVE '+i);
+    if (act==='dump') sendLine('GET '+i);
+  });
+
+  $('#loadAll').addEventListener('click', ()=>{ 
+    for(let i=0;i<8;i++) sendLine('GET '+i); 
+  });
+  $('#dumpAll').addEventListener('click', ()=>{ 
+    for(let i=0;i<8;i++) sendLine('GET '+i); 
+  });
+
+  // Init
+  resizeCanvas();
+  log('Web interface ready. Click "Connect Device" to begin.', 'muted');
+  </script>
+</body>
+</html>
