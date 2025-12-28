@@ -33,6 +33,7 @@ jobs:
           "MOD1_square_vco",
           "MOD1_SyncLFO",
           "MOD1_TapTempoClock",
+          "MOD1_test",          
           "MOD1_TiggerBurst"
         ]
         board: ["arduino:avr:nano", "arduino:avr:nano:cpu=atmega328old"]
@@ -111,6 +112,9 @@ jobs:
               ;;
             "MOD1_TapTempoClock")
               SKETCH_DIR="tap_tempo_clock"
+              ;;
+              "MOD1_test")
+              SKETCH_DIR="test"
               ;;
             "MOD1_TiggerBurst")
               SKETCH_DIR="trigger_burst"
