@@ -21,21 +21,28 @@ LED       EG output
 EEPROM    sustain level
 */
 
-#include <EEPROM.h> // Include EEPROM library for read/write
+#include <EEPROM.h>
 
 // ========== Pin Definitions ==========
-int triggerPin = 17;  // Gate input pin
+int triggerPin = 17;  // Gate input pin (D17 = A3 on Nano)
 int buttonPin  = 4;   // Button input pin, uses internal pull-up (LOW pressed)
 int attackPin  = A0;  // Attack pot
 int decayPin   = A1;  // Decay pot
 int releasePin = A2;  // Release pot
 
-int attackLedPin = 9;   // Indicator for ATTACK state
-int decayLedPin  = 10;  // Indicator for DECAY->RELEASE states
+int attackLedPin = 9;   // Gate out: HIGH only during ATTACK
+int decayLedPin  = 10;  // Gate out: HIGH during DECAY/SUSTAIN/RELEASE
 
-// ========== Sustain Levels (6 examples) ==========
+// ========== "Trigger -> Gate" Lengthening (minimum gate hold) ==========
+// Makes short triggers behave like a usable gate for ADSR.
+// Add tiny jitter so it feels less robotic.
+const uint16_t MIN_GATE_HOLD_MS = 100; // requested 100ms minimum
+const uint8_t  GATE_JITTER_MS   = 10;  // tiny random +/- jitter (set 0 to disable)
+unsigned long  gateHoldUntilMs  = 0;
+
+// ========== Sustain Levels (top step changed from 1023 -> 1000) ==========
 int sustainLevels[6] = {
-  146, 292, 438, 584, 730, 1023
+  146, 292, 438, 584, 730, 1000
 };
 int sustainIndex = 0;
 int sustainLevel = sustainLevels[sustainIndex];
@@ -43,159 +50,195 @@ int sustainLevel = sustainLevels[sustainIndex];
 // ========== ADSR State Machine ==========
 enum {IDLE, ATTACK, DECAY, SUSTAIN, RELEASE};
 int envelopeState = IDLE;
-float envelope = 0.0;  // 0..1023
+float envelope = 0.0f;  // 0..1023
 
 // ========== Timing & Rates ==========
-unsigned long lastUpdateTime = 0;  // For ADSR step every 1ms
-float attackRate  = 0.0;
-float decayRate   = 0.0;
-float releaseRate = 0.0;
+unsigned long lastUpdateTime = 0;
+float attackRate  = 0.0f;
+float decayRate   = 0.0f;
+float releaseRate = 0.0f;
+
+// Phase start levels (fix correct distances for legato/retrigger)
+float decayStartLevel   = 1023.0f;
+float releaseStartLevel = 0.0f;
 
 // Attack time=0 flag (A0 <=10 => instant to max)
 bool attackIsZero = false;
 
 // ========== Button Debounce Variables ==========
-bool lastButtonState = HIGH;             // pull-up => default HIGH
+bool lastButtonState = HIGH;
 unsigned long buttonPreviousMillis = 0;
-const unsigned long debounceDelay  = 30; // ms
+const unsigned long debounceDelay  = 30;
+
+// ========== Time Mapping (more usable ranges) ==========
+const int ATTACK_MIN_MS  = 5;
+const int ATTACK_MAX_MS  = 5000;
+const int DECAY_MIN_MS   = 10;
+const int DECAY_MAX_MS   = 5000;
+const int RELEASE_MIN_MS = 10;
+const int RELEASE_MAX_MS = 5000;
 
 // ========== Function Prototypes ==========
-void updateADSR(); 
+void updateADSR();
 void handleButtonInput();
 
+// Cubic mapping for better resolution at short times (cheap vs pow()).
+static inline int potToTimeMs(int pot, int minMs, int maxMs) {
+  float x = (float)pot / 1023.0f;
+  float y = x * x * x; // cubic
+  return (int)(minMs + (maxMs - minMs) * y + 0.5f);
+}
+
 void setup() {
-  // Configure Timer2 for ~62.5kHz PWM
-  // Fast PWM 8-bit, no prescaler => 16MHz / 256 = 62.5kHz
+  // Timer2 ~62.5kHz PWM: Fast PWM 8-bit, no prescaler
   TCCR2A = 0;
   TCCR2B = 0;
-
-  // Set Fast PWM mode
   TCCR2A |= (1 << WGM21) | (1 << WGM20);
-  // No prescaler
   TCCR2B |= (1 << CS20);
-  // Non-inverting PWM on OC2A / OC2B
   TCCR2A |= (1 << COM2A1) | (1 << COM2B1);
 
-  pinMode(triggerPin, INPUT);       
-  pinMode(buttonPin, INPUT_PULLUP);  // Internal pull-up => LOW when pressed
-  pinMode(11, OUTPUT);               // OCR2A => Envelope output
-  pinMode(3, OUTPUT);                // OCR2B => LED indicator
-  pinMode(attackLedPin, OUTPUT);     // D9 => ATTACK indicator
-  pinMode(decayLedPin, OUTPUT);      // D10 => DECAY/RELEASE indicator
+  pinMode(triggerPin, INPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(11, OUTPUT);               // OCR2A => Envelope output (PWM)
+  pinMode(3, OUTPUT);                // OCR2B => LED indicator (PWM)
+  pinMode(attackLedPin, OUTPUT);
+  pinMode(decayLedPin, OUTPUT);
 
-  // Initialize duty cycle
   OCR2A = 0;
   OCR2B = 0;
 
-  // Read sustainIndex from EEPROM at startup
-  sustainIndex = EEPROM.read(0); // Read index from address 0
-  if (sustainIndex >= 6) {
-    sustainIndex = 0; // Ensure valid range
-  }
+  // Seed RNG for the tiny gate jitter (best-effort: uses timing + gate pin noise)
+  randomSeed((unsigned long)micros() ^ (unsigned long)analogRead(triggerPin));
+
+  // Read sustainIndex from EEPROM
+  sustainIndex = EEPROM.read(0);
+  if (sustainIndex >= 6) sustainIndex = 0;
   sustainLevel = sustainLevels[sustainIndex];
 }
 
 void loop() {
-  // ----- (1) Handle button to update sustain level & EEPROM -----
+  // (1) Button sustain select
   handleButtonInput();
 
-  // ----- (2) Read gate input -----
-  bool gate = digitalRead(triggerPin);
+  // (2) Read raw gate (could be a short trigger pulse)
+  bool rawGate = digitalRead(triggerPin);
 
-  // Gate rising/falling detection
+  // Extend short pulses to a minimum gate length (+/- small jitter)
+  static bool prevRawGate = false;
+  if (rawGate && !prevRawGate) {
+    long hold = (long)MIN_GATE_HOLD_MS;
+    if (GATE_JITTER_MS > 0) {
+      long j = random(-(long)GATE_JITTER_MS, (long)GATE_JITTER_MS + 1); // +/- jitter
+      hold += j;
+      if (hold < 0) hold = 0;
+    }
+    gateHoldUntilMs = millis() + (unsigned long)hold;
+  }
+  prevRawGate = rawGate;
+
+  // Effective gate is rawGate OR still within hold window
+  bool gate = rawGate || (millis() < gateHoldUntilMs);
+
+  // Gate rising/falling detection (use EFFECTIVE gate!)
   static bool prevGate = false;
   if (gate && !prevGate) {
-    // Gate rising => Attack
     envelopeState = ATTACK;
-    // Do not reset envelope => start from current value
   }
   if (!gate && prevGate) {
-    // Gate falling => Release
     if (envelopeState != IDLE) {
+      releaseStartLevel = envelope;   // capture actual level for correct release time
       envelopeState = RELEASE;
     }
   }
   prevGate = gate;
 
-  // ----- (3) Read pot values for Attack/Decay/Release -----
+  // (3) Read pots
   int aVal = analogRead(attackPin);
   int dVal = analogRead(decayPin);
   int rVal = analogRead(releasePin);
 
-  // If Attack pot <=10 => Attack=0ms => envelope instantly 1023
+  // Attack
   if (aVal <= 10) {
     attackIsZero = true;
-    attackRate   = 999999.0; // Arbitrary large
+    attackRate   = 999999.0f;
   } else {
     attackIsZero = false;
-    int attackTimeMs = map(aVal, 0, 1023, 1, 1000);
-    attackRate       = 1023.0 / attackTimeMs;
+    int attackTimeMs = potToTimeMs(aVal, ATTACK_MIN_MS, ATTACK_MAX_MS);
+    attackRate       = 1023.0f / (float)attackTimeMs;
   }
 
-  // Decay
-  int decayTimeMs   = map(dVal, 0, 1023, 1, 1000);
-  float decDist     = 1023.0 - sustainLevel;
-  decayRate         = decDist / decayTimeMs;
+  // Decay (rate based on actual start -> sustain)
+  int decayTimeMs = potToTimeMs(dVal, DECAY_MIN_MS, DECAY_MAX_MS);
+  float decDist   = decayStartLevel - (float)sustainLevel;
 
-  // Release
-  int releaseTimeMs = map(rVal, 0, 1023, 1, 1000);
-  float relDist     = (float)sustainLevel;
-  releaseRate       = relDist / releaseTimeMs;
+  if (decDist <= 0.0f) {
+    decayRate = 999999.0f; // DECAY will settle immediately
+  } else {
+    decayRate = decDist / (float)decayTimeMs;
+    if (decayRate < 0.001f) decayRate = 0.001f;
+  }
 
-  // ----- (4) Update ADSR at ~1ms intervals -----
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastUpdateTime >= 1) {
-    lastUpdateTime = currentMillis;
-    updateADSR(); // Update envelope state machine
+  // Release (rate based on actual level at gate-off)
+  int releaseTimeMs = potToTimeMs(rVal, RELEASE_MIN_MS, RELEASE_MAX_MS);
+  float relDist     = releaseStartLevel;
 
-    // Write envelope to PWM: 0..1023 => 0..255
-    int duty = (int)(envelope / 4.0);
+  if (relDist <= 0.0f) {
+    releaseRate = 999999.0f;
+  } else {
+    releaseRate = relDist / (float)releaseTimeMs;
+    if (releaseRate < 0.001f) releaseRate = 0.001f;
+  }
+
+  // (4) Update ADSR at ~1ms
+  unsigned long now = millis();
+  if (now - lastUpdateTime >= 1) {
+    lastUpdateTime = now;
+    updateADSR();
+
+    // Envelope to PWM (0..1023 -> 0..255)
+    int duty = (int)(envelope / 4.0f);
     if (duty < 0) duty = 0;
     if (duty > 255) duty = 255;
     OCR2A = duty;
     OCR2B = duty;
 
-    // Update ATTACK indicator (D9) => HIGH only in ATTACK
-    if (envelopeState == ATTACK) {
-      digitalWrite(attackLedPin, HIGH);
-    } else {
-      digitalWrite(attackLedPin, LOW);
-    }
-
-    // Update DECAY/RELEASE indicator (D10) => HIGH if DECAY,SUSTAIN,RELEASE
-    if (envelopeState == DECAY || envelopeState == SUSTAIN || envelopeState == RELEASE) {
-      digitalWrite(decayLedPin, HIGH);
-    } else {
-      digitalWrite(decayLedPin, LOW);
-    }
+    // Gate outs
+    digitalWrite(attackLedPin, (envelopeState == ATTACK) ? HIGH : LOW);
+    digitalWrite(decayLedPin,
+      (envelopeState == DECAY || envelopeState == SUSTAIN || envelopeState == RELEASE) ? HIGH : LOW
+    );
   }
 }
 
-/*
-   updateADSR()
-   This function updates the envelope based on the current state.
-   Attack starts from the current envelope value.
-*/
 void updateADSR() {
   switch (envelopeState) {
     case IDLE:
-      envelope = 0.0;
+      envelope = 0.0f;
       break;
 
     case ATTACK:
       if (attackIsZero) {
-        envelope = 1023.0;
+        envelope = 1023.0f;
+        decayStartLevel = envelope;  // capture peak for correct decay distance
         envelopeState = DECAY;
       } else {
         envelope += attackRate;
-        if (envelope >= 1023.0) {
-          envelope = 1023.0;
+        if (envelope >= 1023.0f) {
+          envelope = 1023.0f;
+          decayStartLevel = envelope; // capture peak
           envelopeState = DECAY;
         }
       }
       break;
 
     case DECAY:
+      // If sustain is at/above start level, settle immediately
+      if (decayStartLevel <= (float)sustainLevel) {
+        envelope = (float)sustainLevel;
+        envelopeState = SUSTAIN;
+        break;
+      }
+
       envelope -= decayRate;
       if (envelope <= (float)sustainLevel) {
         envelope = (float)sustainLevel;
@@ -204,40 +247,30 @@ void updateADSR() {
       break;
 
     case SUSTAIN:
-      // Keep sustain level until gate is released
+      envelope = (float)sustainLevel; // enforce stable sustain
       break;
 
     case RELEASE:
-      if (envelope > 0.0) {
-        envelope -= releaseRate;
-      }
-      if (envelope <= 0.0) {
-        envelope = 0.0;
+      if (envelope > 0.0f) envelope -= releaseRate;
+      if (envelope <= 0.0f) {
+        envelope = 0.0f;
         envelopeState = IDLE;
       }
       break;
   }
 }
 
-/*
-   handleButtonInput()
-   This function handles the button press using a debounce approach.
-   The button is internal pull-up => reads HIGH normally, LOW when pressed.
-   Also stores sustainIndex to EEPROM on press.
-*/
 void handleButtonInput() {
   int reading = digitalRead(buttonPin); // LOW when pressed
-  unsigned long currentMillis = millis();
+  unsigned long now = millis();
 
-  // Debounce check
-  if (currentMillis - buttonPreviousMillis > debounceDelay) {
-    // Detect transition HIGH->LOW (button press)
+  if (now - buttonPreviousMillis > debounceDelay) {
     if (reading == LOW && lastButtonState == HIGH) {
       sustainIndex++;
       if (sustainIndex >= 6) sustainIndex = 0;
       sustainLevel = sustainLevels[sustainIndex];
-      EEPROM.write(0, sustainIndex); // Store index to EEPROM
-      buttonPreviousMillis = currentMillis;
+      EEPROM.write(0, sustainIndex);
+      buttonPreviousMillis = now;
     }
   }
   lastButtonState = reading;
