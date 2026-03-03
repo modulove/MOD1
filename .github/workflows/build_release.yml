@@ -33,10 +33,10 @@ jobs:
           "MOD1_square_vco",
           "MOD1_SyncLFO",
           "MOD1_TapTempoClock",
-          "MOD1_test",          
+          "MOD1_test",
           "MOD1_TiggerBurst",
-          "MOD1_Torus";
-          "MOD1_quad";
+          "MOD1_Torus",
+          "MOD1_quad",
           "MOD1_qWalk"
         ]
         board: ["arduino:avr:nano", "arduino:avr:nano:cpu=atmega328old"]
@@ -125,10 +125,10 @@ jobs:
             "MOD1_Torus")
               SKETCH_DIR="torus"
               ;;
-            "MOD1_Quad")
+            "MOD1_qWalk")
               SKETCH_DIR="qwalk"
-              ;;              
-            "MOD1_Quad")
+              ;;
+            "MOD1_quad")
               SKETCH_DIR="quad"
               ;;
           esac
