@@ -34,7 +34,8 @@ jobs:
           "MOD1_SyncLFO",
           "MOD1_TapTempoClock",
           "MOD1_test",          
-          "MOD1_TiggerBurst"
+          "MOD1_TiggerBurst",
+          "MOD1_Torus"
         ]
         board: ["arduino:avr:nano", "arduino:avr:nano:cpu=atmega328old"]
         include:
@@ -118,6 +119,9 @@ jobs:
               ;;
             "MOD1_TiggerBurst")
               SKETCH_DIR="trigger_burst"
+              ;;
+            "MOD1_Torus")
+              SKETCH_DIR="torus"
               ;;
           esac
 
