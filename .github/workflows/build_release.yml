@@ -3,10 +3,12 @@ name: Build and Release Firmware
 on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-  # Workflow executes on semantic version tag
+  # Workflow executes on semantic version tag - both spellings (v0.0.7 and v.0.0.7) publish a release.
+  # A manual run only builds artifacts; the release and the website update need a tag.
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v.[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
@@ -39,12 +41,26 @@ jobs:
           "MOD1_quad",
           "MOD1_qWalk"
         ]
-        board: ["arduino:avr:nano", "arduino:avr:nano:cpu=atmega328old"]
+        # LGT8F328P nano boards run the firmwares at 16 MHz (internal 32 MHz RC / 2), so the
+        # timer setups written for the 16 MHz Nano keep their rates; boardpath matches the web uploader key
+        board: ["arduino:avr:nano", "arduino:avr:nano:cpu=atmega328old", "lgt8fx:avr:328:clock_div=2"]
         include:
           - board: arduino:avr:nano
             boardpath: nano
           - board: arduino:avr:nano:cpu=atmega328old
             boardpath: nanoOldBootloader
+          - board: lgt8fx:avr:328:clock_div=2
+            boardpath: lgt8f328p
+        # LGT8F328P builds only for the firmwares on the web uploader page
+        exclude:
+          - firmware: MOD1_test
+            board: lgt8fx:avr:328:clock_div=2
+          - firmware: MOD1_Torus
+            board: lgt8fx:avr:328:clock_div=2
+          - firmware: MOD1_quad
+            board: lgt8fx:avr:328:clock_div=2
+          - firmware: MOD1_qWalk
+            board: lgt8fx:avr:328:clock_div=2
 
     steps:
       - name: Clone repo
@@ -59,6 +75,14 @@ jobs:
         run: |
           arduino-cli core update-index
           arduino-cli core install arduino:avr
+
+      - name: Install LGT8F328P platform
+        if: startsWith(matrix.board, 'lgt8fx:')
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/dbuezas/lgt8fx/master/package_lgt8fx_index.json
+          arduino-cli core update-index
+          arduino-cli core install lgt8fx:avr@2.0.7
 
       - name: Compile sketch and rename output file for release
         working-directory: ./Firmware
@@ -154,6 +178,10 @@ jobs:
 
       - name: Display structure of downloaded files
         run: ls -R
+
+      - name: Note that manual runs do not publish
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: echo "::notice::Manual run - the hex files are build artifacts only. Push a tag (v0.0.7 or v.0.0.7) to publish a release and update the web uploader."
 
       - name: Create Release and attach files
         uses: softprops/action-gh-release@v2

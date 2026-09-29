@@ -70,6 +70,10 @@ void setup() {
   pinMode(11, OUTPUT);
 
   freqRange = EEPROM.read(0);
+  // Erased EEPROM reads 255 (new chip, and after every upload on LGT8F328P); fall back to the normal range
+  if (freqRange != 1 && freqRange != 10) {
+    freqRange = 1;
+  }
 
   TCCR2A = (1 << WGM21) | (1 << WGM20) | (1 << COM2B1);
   TCCR2B = (1 << CS20);
