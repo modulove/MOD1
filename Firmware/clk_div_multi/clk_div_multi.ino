@@ -68,7 +68,21 @@ const int analogPins[3] = {A0, A1, A2};
   #define OUT3_HIGH() (OUT3_PORT |= OUT3_BIT)
   #define OUT3_LOW() (OUT3_PORT &= ~OUT3_BIT)
   
-  #define BUTTON_PRESSED() (!(BUTTON_PIN & BUTTON_BIT))
+  #if defined(__LGT8F__)
+    // LGT8F328P: its internal pull-up (~4k) is stronger than the 10k resistor in series
+    // with the button, so a press never reads LOW. Switch the pull-up off for a moment
+    // instead: a pressed button drains the pin through the 10k, a released one stays high.
+    static inline bool buttonPressedLgt() {
+      BUTTON_PORT &= ~BUTTON_BIT;   // pull-up off
+      delayMicroseconds(5);
+      bool pressed = !(BUTTON_PIN & BUTTON_BIT);
+      BUTTON_PORT |= BUTTON_BIT;    // pull-up back on
+      return pressed;
+    }
+    #define BUTTON_PRESSED() buttonPressedLgt()
+  #else
+    #define BUTTON_PRESSED() (!(BUTTON_PIN & BUTTON_BIT))
+  #endif
   #define CLOCK_READ() (CLOCK_PIN & CLOCK_BIT)
 #else
   // Fallback for other boards

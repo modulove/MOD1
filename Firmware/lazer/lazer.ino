@@ -426,7 +426,19 @@ bool pickupReached(uint8_t live, uint8_t stored){ return (abs(int(live)-int(stor
 
 // ===================== Button =====================
 // Use direct port read for speed
-static inline bool btn(){ return !(PIND & (1<<PD4)); }
+// LGT8F328P: its internal pull-up (~4k) is stronger than the 10k resistor in series
+// with the button, so a press never reads LOW. Switch the pull-up off for a moment
+// instead: a pressed button drains the pin through the 10k, a released one stays high.
+static inline bool btn(){
+#if defined(__LGT8F__)
+  PORTD &= ~(1<<PD4); delayMicroseconds(5);
+  bool pressed = !(PIND & (1<<PD4));
+  PORTD |= (1<<PD4);
+  return pressed;
+#else
+  return !(PIND & (1<<PD4));
+#endif
+}
 
 
 // ===================== Mode engines =====================
