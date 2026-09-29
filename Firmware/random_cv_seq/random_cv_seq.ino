@@ -11,7 +11,7 @@ Pins (MOD1):
   F1    D17 Clock in
   F2    D9  Random value update (TRIG IN)
   F3    D10 CV output (PWM @ 62.5 kHz)  <-- quantized + tuning menu out
-  F4    D11 Trigger output (improved pulse/gate)
+  F4    D11 Gate output: opens 7 ms after the CV step (CV settle time), lasts the step
   BUTTON D4 Random value update / scale select (long press)
   LED   D3 CV level (PWM)
 
@@ -49,13 +49,19 @@ unsigned long currentMillis  = 0;
 
 // -------------------- Improved gate/trigger (D11) --------------------
 bool gateHigh = false;
+bool gatePending = false;             // gate waits for the CV to settle
+uint32_t gateOnAtUs = 0;
+uint16_t gateLenMs = 0;
 uint32_t gateOffAtMs = 0;
 uint32_t lastStepEdgeMs = 0;
 
 // Adjust these to taste:
-const uint16_t GATE_BASE_MS = 10;     // default pulse width (works well with MOD1 RC)
+const uint16_t CV_SETTLE_US = 7000;   // gate opens this long after the CV step: the F3 output filter
+                                      // (1k + 1uF, ~1 ms) needs ~7 ms to bring a 3-octave jump within
+                                      // ~3 cents. Without it the note starts with a pitch slide.
+const uint16_t GATE_MIN_MS  = 10;     // shortest gate
 const uint16_t GATE_MAX_MS  = 120;    // clamp for very slow clocks
-const bool     GATE_TIE     = true;   // if true: extend gate across rests (longer when no new note)
+const bool     GATE_TIE     = false;  // if true: hold the gate across steps that don't fire
 
 // -------------------- Button handling (debounced events) --------------------
 enum BtnEvent : uint8_t { BTN_NONE=0, BTN_SHORT=1, BTN_LONG=2 };
@@ -495,15 +501,23 @@ void loop() {
     int trigThreshold = map(trigVal, 0, 1023, 0, 255);
     bool thisStepFires = (trigValues[currentStep] < trigThreshold);
 
+    // Close the running gate as the CV moves (unless it is tied over a rest); the settle
+    // time then doubles as the gap that lets the next note retrigger through F4's filter
+    if (gateHigh && (thisStepFires || !GATE_TIE)) {
+      digitalWrite(trigOutPin, LOW);
+      gateHigh = false;
+    }
+    gatePending = false;
+
     if (thisStepFires) {
-      digitalWrite(trigOutPin, HIGH);
-      gateHigh = true;
+      // Gate lasts the step (clamped); the next clock edge closes it at the latest
+      uint16_t gateMs = stepDurMs;
+      if (gateMs < GATE_MIN_MS) gateMs = GATE_MIN_MS;
+      if (gateMs > GATE_MAX_MS) gateMs = GATE_MAX_MS;
+      gateLenMs = gateMs;
 
-      uint16_t gateMs = GATE_BASE_MS;
-      if (gateMs > stepDurMs - 1) gateMs = (stepDurMs > 1) ? (uint16_t)(stepDurMs - 1) : GATE_BASE_MS;
-      if (gateMs > GATE_MAX_MS)   gateMs = GATE_MAX_MS;
-
-      gateOffAtMs = now + gateMs;
+      gateOnAtUs = micros() + CV_SETTLE_US;
+      gatePending = true;
 
     } else if (GATE_TIE && gateHigh) {
       // No new note, extend gate a bit into the rest
@@ -513,6 +527,14 @@ void loop() {
     }
   }
   lastTriggerState = trigReading;
+
+  // Open the gate once the CV has settled
+  if (gatePending && (long)(micros() - gateOnAtUs) >= 0) {
+    digitalWrite(trigOutPin, HIGH);
+    gatePending = false;
+    gateHigh = true;
+    gateOffAtMs = millis() + gateLenMs;
+  }
 
   // Re-randomize upon rising edge of D9 trigger
   static bool lastReRandState = HIGH;
