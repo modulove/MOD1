@@ -88,6 +88,21 @@ void setup() {
   digitalWrite(outputPin, LOW);
 }
 
+// LGT8F328P: its internal pull-up (~4k) is stronger than the 10k resistor in series
+// with the button, so a press never reads LOW. Switch the pull-up off for a moment
+// instead: a pressed button drains the pin through the 10k, a released one stays high.
+#if defined(__LGT8F__)
+int readButton() {
+  PORTD &= ~_BV(PD4);   // pull-up off (button = D4)
+  delayMicroseconds(5);
+  int level = (PIND & _BV(PD4)) ? HIGH : LOW;
+  PORTD |= _BV(PD4);    // pull-up back on
+  return level;
+}
+#else
+#define readButton() digitalRead(resetButtonPin)
+#endif
+
 void loop() {
   // Read A2 value to determine step mode
   int stepModeValue = analogRead(stepModePin);
@@ -150,7 +165,7 @@ void loop() {
 
   // Check reset input or reset button with debounce
   bool resetInput = digitalRead(resetInputPin) == HIGH;
-  bool resetButton = digitalRead(resetButtonPin) == LOW; // Button is active LOW
+  bool resetButton = readButton() == LOW; // Button is active LOW
   static bool lastResetInputState = false; // Previous reset input state
 
   if ((resetInput || resetButton) && !lastResetInputState) {

@@ -545,6 +545,21 @@ uint8_t mutated_notes[MAX_MUTATED_STEPS];
 bool mutations_active[MAX_MUTATED_STEPS];  // Which steps have mutations
 bool mutations_enabled = true;
 
+// LGT8F328P: its internal pull-up (~4k) is stronger than the 10k resistor in series
+// with the button, so a press never reads LOW. Switch the pull-up off for a moment
+// instead: a pressed button drains the pin through the 10k, a released one stays high.
+#if defined(__LGT8F__)
+int read_button() {
+  PORTD &= ~_BV(PD4);   // pull-up off (button = D4)
+  delayMicroseconds(5);
+  int level = (PIND & _BV(PD4)) ? HIGH : LOW;
+  PORTD |= _BV(PD4);    // pull-up back on
+  return level;
+}
+#else
+#define read_button() digitalRead(PIN_SONG_BTN)
+#endif
+
 // ============================================
 // SETUP
 // ============================================
@@ -604,7 +619,7 @@ void setup() {
   grid_length = GRID_LENGTHS[grid_index];
   
   // Read initial button state
-  last_btn_state = digitalRead(PIN_SONG_BTN);
+  last_btn_state = read_button();
   
   // Print initial song info
   print_song_info();
@@ -688,7 +703,7 @@ void loop() {
 // BUTTON HANDLING
 // ============================================
 void handle_button(unsigned long now) {
-  bool btn_state = digitalRead(PIN_SONG_BTN);
+  bool btn_state = read_button();
   
   // Button just pressed (falling edge - active low)
   if (!btn_state && last_btn_state) {

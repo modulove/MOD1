@@ -83,17 +83,17 @@ unsigned long lastChipUpdate = 0;
 // LGT8F328P: its internal pull-up (~4k) is stronger than the 10k resistor in series
 // with the button, so a press never reads LOW. Switch the pull-up off for a moment
 // instead: a pressed button drains the pin through the 10k, a released one stays high.
-int readButton() {
 #if defined(__LGT8F__)
+int readButton() {
   PORTD &= ~_BV(PD4);   // pull-up off (buttonPin = D4)
   delayMicroseconds(5);
   int level = (PIND & _BV(PD4)) ? HIGH : LOW;
   PORTD |= _BV(PD4);    // pull-up back on
   return level;
-#else
-  return digitalRead(buttonPin);
-#endif
 }
+#else
+#define readButton() digitalRead(buttonPin)
+#endif
 
 void handleButtonInput() {
   int reading = readButton(); // LOW when pressed

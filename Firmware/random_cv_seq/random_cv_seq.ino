@@ -60,6 +60,21 @@ const bool     GATE_TIE     = true;   // if true: extend gate across rests (long
 // -------------------- Button handling (debounced events) --------------------
 enum BtnEvent : uint8_t { BTN_NONE=0, BTN_SHORT=1, BTN_LONG=2 };
 
+// LGT8F328P: its internal pull-up (~4k) is stronger than the 10k resistor in series
+// with the button, so a press never reads LOW. Switch the pull-up off for a moment
+// instead: a pressed button drains the pin through the 10k, a released one stays high.
+#if defined(__LGT8F__)
+int readButton(uint8_t) {   // every caller passes buttonPin (D4)
+  PORTD &= ~_BV(PD4);   // pull-up off (button = D4)
+  delayMicroseconds(5);
+  int level = (PIND & _BV(PD4)) ? HIGH : LOW;
+  PORTD |= _BV(PD4);    // pull-up back on
+  return level;
+}
+#else
+#define readButton(pin) digitalRead(pin)
+#endif
+
 BtnEvent pollButton(uint8_t pin, unsigned long nowMs) {
   static bool rawPrev = HIGH;          // raw level (INPUT_PULLUP)
   static bool stable  = HIGH;          // debounced level
@@ -70,7 +85,7 @@ BtnEvent pollButton(uint8_t pin, unsigned long nowMs) {
   const unsigned long DEBOUNCE_MS = 30;
   const unsigned long LONG_MS     = 800;
 
-  bool raw = digitalRead(pin);
+  bool raw = readButton(pin);
   if (raw != rawPrev) { rawPrev = raw; lastEdgeMs = nowMs; }
 
   // Accept new stable level after debounce
@@ -434,9 +449,9 @@ void setup() {
   loadCalibration();
 
   // Boot-hold to enter tuning menu
-  if (digitalRead(buttonPin) == LOW) {
+  if (readButton(buttonPin) == LOW) {
     delay(BOOT_HOLD_MS);
-    if (digitalRead(buttonPin) == LOW) {
+    if (readButton(buttonPin) == LOW) {
       runTuningMenu();       // returns when user exits
       loadCalibration();     // user may have saved changes
     }
